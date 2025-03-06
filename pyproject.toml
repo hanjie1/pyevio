@@ -1,0 +1,26 @@
+[project]
+name = "pyevio"
+version = "0.1.0"
+description = "A Python EVIO parsing library and CLI."
+authors = [
+    { name = "Dmitry Romanov", email = "romanovda@gmail.com" }
+]
+requires-python = ">=3.9"
+dependencies = [
+    "click>=8.1.0",
+    "lz4>=4.4.0"
+]
+
+
+[project.optional-dependencies]
+test = [
+    "pytest"
+]
+
+
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project.scripts]
+pyevio = "pyevio.cli:main"
