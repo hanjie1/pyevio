@@ -1,81 +1,132 @@
 import pytest
 from pyevio.parser import parse_file
-import os
 
 @pytest.fixture
 def mock_v4_file(tmp_path):
     """
-    Create a minimal EVIO v4 file with:
-     - 1 block (8 words header)
-     - block_length=14 words total
-     - header_length=8
-     - event_count=1
-     - magic=0xc0da0100
-     - Then 1 event: length=3, so 4 words total => 16 bytes
-    The data for the event is arbitrary.
-
-    Layout (all 32-bit ints):
-    Block header (8 words):
-       0) 14  (block length in words)
-       1)  1  (block number)
-       2)  8  (header length)
-       3)  1  (event count)
-       4)  0  (reserved)
-       5)  (bit info + version=4 => let's just use 0x4)
-       6)  0  (reserved2)
-       7)  0xc0da0100 (magic)
-    Then event of 4 words:
-       word0 => 3 (bank length)
-       word1 => 0xfadecafe
-       word2 => 0x12345678
-       word3 => 0x9abcdef0
-    Total = 12 words. But let's match the block_length=14 => we add 2 dummy words of 0 at the end or treat it as leftover?
-
-    Let's keep it consistent: block_length=12 is simpler. We'll do that.
-    We'll update the header's block_length=12 to match exactly. No leftover words.
-
-    In real evio, we might also have a "last block" bit, but let's skip that detail.
+    Create a minimal EVIO v4 file with 1 block containing 1 event.
     """
     block_header = [
-        12,      # block_length
-        1,       # block_number
-        8,       # header_length
-        1,       # event_count
-        0,       # reserved
-        4,       # bitinfo + version (lowest 8 bits=4)
-        0,       # reserved2
-        0xc0da0100,  # magic
+        12,   # block_length words
+        1,    # block_number
+        8,    # header_length
+        1,    # event_count
+        0,    # reserved
+        4,    # bitinfo+version
+        0,    # reserved
+        0xc0da0100,  # magic in little-end form
     ]
-    event_data = [
-        3,           # bank length => 3 => total words = 4
-        0xfadecafe,
-        0x12345678,
-        0x9abcdef0,
-    ]
+    # one event: length=3 => total 4 words: [3, data1, data2, data3]
+    event_data = [3, 0x11111111, 0x22222222, 0x33333333]
     all_words = block_header + event_data
-    # convert to bytes in system-endian
-    file_bytes = b"".join(int(x).to_bytes(4, "little") for x in all_words)
 
+    # little-end
+    file_bytes = b''.join(int(x).to_bytes(4, 'little') for x in all_words)
     fpath = tmp_path / "mock_v4.evio"
     with open(fpath, "wb") as f:
         f.write(file_bytes)
-
     return str(fpath)
 
-
-def test_parse_v4_file(mock_v4_file):
+def test_v4_parsing(mock_v4_file):
     events = parse_file(mock_v4_file)
-    assert len(events) == 1, "Should find exactly 1 event"
-    evraw = events[0]
-    # length = 4 words => 16 bytes
-    assert len(evraw) == 16, "Event #0 should have 16 bytes"
-    # check data inside
-    w0 = int.from_bytes(evraw[0:4], "little")
-    w1 = int.from_bytes(evraw[4:8], "little")
-    w2 = int.from_bytes(evraw[8:12], "little")
-    w3 = int.from_bytes(evraw[12:16], "little")
-    assert w0 == 3
-    assert w1 == 0xfadecafe
-    assert w2 == 0x12345678
-    assert w3 == 0x9abcdef0
+    assert len(events) == 1
+    ev = events[0]
+    assert len(ev) == 16  # 4 words
+    # interpret them in little-end for checking
+    w0 = int.from_bytes(ev[0:4], 'little')
+    w1 = int.from_bytes(ev[4:8], 'little')
+    w2 = int.from_bytes(ev[8:12], 'little')
+    w3 = int.from_bytes(ev[12:16], 'little')
+    assert (w0, w1, w2, w3) == (3, 0x11111111, 0x22222222, 0x33333333)
 
+
+@pytest.fixture
+def mock_v6_file(tmp_path):
+    """
+    Create a minimal EVIO v6 file with 1 record => 2 events uncompressed.
+    This is a simplistic example ignoring the file's index array.
+    """
+    # The file header is 14 words => each 4 bytes => 56 bytes
+    # We'll assume little-end.
+    # Words [8..13] store the user reg/trailer pos ints, no big effect here.
+
+    # file_type_id=0x4556494F ('EVIO'), file_number=1, header_length=14 words
+    # record_count=0, index_array_len=0, bit_info_version= (lowest8bits=6 => v6)
+    # user_header_len=0, magic=0xc0da0100
+    # rest = 0
+    file_header = [
+        0x4556494F, 1, 14, 0, 0, 6, 0, 0xc0da0100,
+        0,0, 0,0, 0,0
+    ]
+
+    # Then a single record (14 words).
+    # record_length, record_number, header_length=14
+    # event_count=2, index_array_len=8 (2 events => 8 bytes?), bit_info_version => version=6
+    # user_header_len=0, magic=0xc0da0100
+    # uncompressed_len => we'll fill later
+    # compressed_len => top nibble=0 => uncompressed
+    # the rest => 0
+    rec_header = [
+        0, 1, 14, 2,   # record_length=0 placeholder -> fix after we know total
+        8, 6, 0, 0xc0da0100,
+        0, 0, 0,0, 0,0
+    ]
+    # index array => 2 events => lengths in bytes
+    # Suppose 1st event is 12 bytes, 2nd event is 16 bytes => total 28
+    # We'll do [12,16]
+    index_array = [12, 16]
+
+    # user_header => none, so skip
+    # event data => let's define 2 events
+    # ev1 => 3 words => [2, 0xaaaaaaaa, 0xbbbbbbbb], total 12 bytes
+    # ev2 => 4 words => [3, 0x11111111, 0x22222222, 0x33333333], total 16 bytes
+    ev1_data = [2, 0xaaaaaaaa, 0xbbbbbbbb]  # length=2 => total=3 words => 12 bytes
+    ev2_data = [3, 0x11111111, 0x22222222, 0x33333333]
+
+    # total data bytes => 12 + 16 = 28
+    # record_length => 14 (hdr) + 28/4=7 words => 21
+    # uncompressed_len => 28 => but must be padded to multiple of 4 => 28 is multiple => so store 28
+    rec_length_words = 14 + 7
+    rec_header[0] = rec_length_words
+    uncompressed_len = 28
+    rec_header[8] = uncompressed_len  # word #9 => uncompressed data len in bytes
+
+    # Build up the record
+    rec_header_bytes = b''.join(int(x).to_bytes(4, 'little') for x in rec_header)
+    index_array_bytes = b''.join(int(x).to_bytes(4, 'little') for x in index_array)
+    ev1_bytes = b''.join(int(x).to_bytes(4, 'little') for x in ev1_data)
+    ev2_bytes = b''.join(int(x).to_bytes(4, 'little') for x in ev2_data)
+    record_bytes = rec_header_bytes + index_array_bytes + ev1_bytes + ev2_bytes
+
+    # file header
+    file_header_bytes = b''.join(int(x).to_bytes(4, 'little') for x in file_header)
+
+    # write out
+    all_bytes = file_header_bytes + record_bytes
+    path = tmp_path / "mock_v6.evio"
+    with open(path, "wb") as f:
+        f.write(all_bytes)
+    return str(path)
+
+
+def test_v6_parsing(mock_v6_file):
+    events = parse_file(mock_v6_file)
+    assert len(events) == 2
+
+    # check event #1
+    ev1 = events[0]
+    # 3 words => 12 bytes
+    assert len(ev1) == 12
+    w0 = int.from_bytes(ev1[0:4], 'little')
+    w1 = int.from_bytes(ev1[4:8], 'little')
+    w2 = int.from_bytes(ev1[8:12], 'little')
+    assert (w0, w1, w2) == (2, 0xaaaaaaaa, 0xbbbbbbbb)
+
+    # check event #2
+    ev2 = events[1]
+    assert len(ev2) == 16
+    w0 = int.from_bytes(ev2[0:4], 'little')
+    w1 = int.from_bytes(ev2[4:8], 'little')
+    w2 = int.from_bytes(ev2[8:12], 'little')
+    w3 = int.from_bytes(ev2[12:16], 'little')
+    assert (w0, w1, w2, w3) == (3, 0x11111111, 0x22222222, 0x33333333)
