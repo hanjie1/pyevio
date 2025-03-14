@@ -1,5 +1,5 @@
 import pytest
-from pyevio.parser import parse_file
+from pyevio.core import parse_file
 
 @pytest.fixture
 def mock_v4_file(tmp_path):
