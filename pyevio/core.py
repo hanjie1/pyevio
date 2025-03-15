@@ -58,58 +58,43 @@ class EvioFile:
 
     def scan_structure(self):
         """
-        Scan file structure, parse the file header, and identify record offsets.
+        Scan file structure, parse the file header, and identify record offsets
+        by sequentially navigating through the file structure.
         """
-        # Parse file header
-        self.header = FileHeader.from_buffer(self.mm, 0)
+        offset = 0  # Start at the beginning of the file
 
-        # Process index array if present
+        # 1. Parse file header
+        self.header = FileHeader.from_buffer(self.mm, offset)
+        offset += self.header.header_length * 4  # Move past file header (length in bytes)
+
+        # 2. Skip index array if present
         if self.header.index_array_length > 0:
-            # Calculate index array position (after header)
-            index_array_offset = self.header.header_length * 4  # Header length in bytes
+            offset += self.header.index_array_length
 
-            # Parse index array to get record offsets
-            index_array_entries = self.header.index_array_length // 8  # Each entry is 8 bytes (length + event count)
-            for i in range(index_array_entries):
-                pos = index_array_offset + (i * 8)
-                record_length = struct.unpack(self.header.endian + 'I', self.mm[pos:pos+4])[0]
-                # We don't need event count for now
-                # event_count = struct.unpack(self.header.endian + 'I', self.mm[pos+4:pos+8])[0]
+        # 3. Skip user header if present
+        if self.header.user_header_length > 0:
+            offset += self.header.user_header_length
 
-                if i == 0:
-                    # First record starts after index array and user header
-                    first_record_offset = (
-                            index_array_offset +
-                            self.header.index_array_length +
-                            self.header.user_header_length
-                    )
-                    self.record_offsets.append(first_record_offset)
-                else:
-                    # Subsequent records start after the previous record
-                    next_offset = self.record_offsets[-1] + record_length
-                    self.record_offsets.append(next_offset)
-        else:
-            # If no index array, scan records sequentially
-            # Start at the end of the header plus any user header
-            offset = self.header.header_length * 4 + self.header.user_header_length
+        # 4. Parse records sequentially
+        while offset < self.file_size:
+            try:
+                # Store this record's position
+                self.record_offsets.append(offset)
 
-            # Scan until we reach the end of the file or the trailer position
-            while offset < self.file_size:
-                try:
-                    self.record_offsets.append(offset)
-                    record_header = self.scan_record(self.mm, offset)
+                # Parse record header
+                record_header = self.scan_record(self.mm, offset)
 
-                    # Move to next record
-                    offset += record_header.record_length * 4  # Length in bytes
+                # Move to next record
+                offset += record_header.record_length * 4  # Length in bytes
 
-                    # Stop if this was the last record
-                    if record_header.is_last_record:
-                        break
-                except Exception as e:
-                    # Log error but continue scanning
-                    print(f"Error scanning record at offset {offset}: {e}")
-                    print(make_hex_dump(self.mm[offset: offset+64], title="Data dump at this offset"))
-                    raise
+                # Stop if this was the last record
+                if record_header.is_last_record:
+                    break
+
+            except Exception as e:
+                print(f"Error scanning record at offset 0x{offset:X}: {e}")
+                print(make_hex_dump(self.mm[offset:offset+64], title="Data dump at this offset"))
+                raise
 
     @staticmethod
     def scan_record(mm: mmap.mmap, offset: int) -> RecordHeader:
@@ -170,5 +155,4 @@ class EvioFile:
         """
         data_start, _ = self.find_record(record_index)
         return Bank.from_buffer(self.mm, data_start, self.header.endian)
-
 
