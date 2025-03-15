@@ -11,11 +11,33 @@ class RecordHeader:
     HEADER_SIZE = 56  # 14 words * 4 bytes
 
     def __init__(self):
-        """Initialize an empty RecordHeader object"""
-        # [Fields initialization as before]
+        """
+            Initialize an empty RecordHeader object
+        """
+        self.record_length = -1
+        self.record_number = -1
+        self.header_length = -1
+        self.endian = ""
+        self.event_count = -1
+        self.index_array_length = -1
+        self.version = -1
+        self.bit_info = -1
+        self.user_header_length = -1
+        self.magic_number = -1
+        self.uncompressed_data_length = -1
+        self.compression_type = -1
+        self.compressed_data_length = -1
+        self.user_register1 = -1
+        self.user_register2 = -1
+        self.version = -1
+        self.magic_number = -1
+        self.has_dictionary = False
+        self.is_last_record = False
+        self.has_first_event = False
+        self.event_type = f"NeverInitialized"
 
     @staticmethod
-    def from_buffer(buffer, offset=0):
+    def parse(buffer, offset=0):
         """
         Parse a RecordHeader from a memory-mapped buffer.
         

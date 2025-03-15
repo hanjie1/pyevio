@@ -108,7 +108,7 @@ class EvioFile:
         Returns:
             RecordHeader object
         """
-        return RecordHeader.from_buffer(mm, offset)
+        return RecordHeader.parse(mm, offset)
 
     def find_record(self, index: int) -> Tuple[int, int]:
         """
