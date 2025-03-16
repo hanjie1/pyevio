@@ -7,6 +7,7 @@ from datetime import datetime
 from pyevio.bank import Bank
 from pyevio.file_header import FileHeader
 from pyevio.record_header import RecordHeader
+from pyevio.roc_time_slice_bank import RocTimeSliceBank, StreamInfoBank, PayloadBank
 from pyevio.utils import make_hex_dump
 
 
@@ -16,12 +17,13 @@ class EvioFile:
     methods for navigating through the file structure.
     """
 
-    def __init__(self, filename: str, verbose: bool):
+    def __init__(self, filename: str, verbose: bool = False):
         """
         Initialize EvioFile object with a file path.
 
         Args:
             filename: Path to the EVIO file
+            verbose: Enable verbose output
         """
         self.verbose = verbose
         self.filename = filename
@@ -92,8 +94,9 @@ class EvioFile:
                     break
 
             except Exception as e:
-                print(f"Error scanning record at offset 0x{offset:X}: {e}")
-                print(make_hex_dump(self.mm[offset:offset+64], title="Data dump at this offset"))
+                if self.verbose:
+                    print(f"Error scanning record at offset 0x{offset:X}: {e}")
+                    print(make_hex_dump(self.mm[offset:offset+64], title="Data dump at this offset"))
                 raise
 
     @staticmethod
@@ -156,3 +159,70 @@ class EvioFile:
         data_start, _ = self.find_record(record_index)
         return Bank.from_buffer(self.mm, data_start, self.header.endian)
 
+    def get_event_offsets(self, record_index: int) -> List[int]:
+        """
+        Get a list of event offsets within a record.
+
+        Args:
+            record_index: Record index (0-based)
+
+        Returns:
+            List of byte offsets for each event in the record
+        """
+        if record_index < 0 or record_index >= len(self.record_offsets):
+            raise IndexError(f"Record index {record_index} out of range (0-{len(self.record_offsets)-1})")
+
+        record_offset = self.record_offsets[record_index]
+        record_header = self.scan_record(self.mm, record_offset)
+
+        # Calculate data locations
+        data_start = record_offset + record_header.header_length * 4
+        index_start = data_start
+        index_end = index_start + record_header.index_array_length
+        content_start = index_end + record_header.user_header_length
+
+        # Parse event index
+        event_offsets = []
+
+        if record_header.index_array_length > 0:
+            # Parse from index array
+            event_count = record_header.index_array_length // 4
+            current_offset = content_start
+
+            for i in range(event_count):
+                length_offset = index_start + (i * 4)
+                event_length = struct.unpack(self.header.endian + 'I',
+                                             self.mm[length_offset:length_offset+4])[0]
+
+                # Store event offset
+                event_offsets.append(current_offset)
+
+                # Update cumulative offset for next event
+                current_offset += event_length
+
+        return event_offsets
+
+    def get_event(self, record_index: int, event_index: int) -> Optional[RocTimeSliceBank]:
+        """
+        Get a parsed ROC Time Slice Bank for a specific event.
+
+        Args:
+            record_index: Record index (0-based)
+            event_index: Event index within the record (0-based)
+
+        Returns:
+            RocTimeSliceBank object if parsing succeeds, None otherwise
+        """
+        event_offsets = self.get_event_offsets(record_index)
+
+        if event_index < 0 or event_index >= len(event_offsets):
+            raise IndexError(f"Event index {event_index} out of range (0-{len(event_offsets)-1})")
+
+        evt_offset = event_offsets[event_index]
+
+        try:
+            return RocTimeSliceBank(self.mm, evt_offset, self.header.endian)
+        except Exception as e:
+            if self.verbose:
+                print(f"Error parsing event as ROC Time Slice Bank: {e}")
+            return None
