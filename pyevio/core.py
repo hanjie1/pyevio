@@ -1,20 +1,20 @@
 import mmap
 import os
 import struct
-from typing import List, Tuple, Optional, Dict, Any
+from typing import List, Tuple, Optional, Dict, Any, Iterator
 from datetime import datetime
 
-from pyevio.bank import Bank
 from pyevio.file_header import FileHeader
-from pyevio.record_header import RecordHeader
-from pyevio.roc_time_slice_bank import RocTimeSliceBank, StreamInfoBank, PayloadBank
-from pyevio.utils import make_hex_dump
+from pyevio.record import Record
+from pyevio.event import Event
 
 
 class EvioFile:
     """
-    Main class for handling EVIO v6 files. Manages file resources and provides
-    methods for navigating through the file structure.
+    Main class for handling EVIO v6 files.
+
+    Manages file resources and provides methods for navigating through
+    the file structure using Records and Events.
     """
 
     def __init__(self, filename: str, verbose: bool = False):
@@ -29,15 +29,32 @@ class EvioFile:
         self.filename = filename
         self.file = open(filename, 'rb')
         self.file_size = os.path.getsize(filename)
+
         # Memory map the file for efficient access
         self.mm = mmap.mmap(self.file.fileno(), 0, access=mmap.ACCESS_READ)
 
-        # Will be populated by scan_structure
-        self.header = None
-        self.record_offsets = []
+        # Parse file header
+        self.header = FileHeader.from_buffer(self.mm, 0)
 
-        # Scan file structure upon initialization
-        self.scan_structure()
+        # Calculate initial offset after file header
+        self.first_record_offset = self.header.header_length * 4
+
+        # Skip index array if present
+        if self.header.index_array_length > 0:
+            self.first_record_offset += self.header.index_array_length
+
+        # Skip user header if present
+        if self.header.user_header_length > 0:
+            self.first_record_offset += self.header.user_header_length
+
+        # Record objects (will be created on demand)
+        self._records = {}
+
+        # Scan record offsets
+        self._record_offsets = self._scan_record_offsets()
+
+        # Total event count cache
+        self._total_event_count = None
 
     def __del__(self):
         """Cleanup resources when object is destroyed"""
@@ -58,171 +75,142 @@ class EvioFile:
         """Cleanup when exiting context"""
         self.__del__()
 
-    def scan_structure(self):
+    def _scan_record_offsets(self) -> List[int]:
         """
-        Scan file structure, parse the file header, and identify record offsets
-        by sequentially navigating through the file structure.
+        Scan the file to find all record offsets.
+
+        Returns:
+            List of record offsets in bytes
         """
-        offset = 0  # Start at the beginning of the file
+        record_offsets = []
+        offset = self.first_record_offset
 
-        # 1. Parse file header
-        self.header = FileHeader.from_buffer(self.mm, offset)
-        offset += self.header.header_length * 4  # Move past file header (length in bytes)
-
-        # 2. Skip index array if present
-        if self.header.index_array_length > 0:
-            offset += self.header.index_array_length
-
-        # 3. Skip user header if present
-        if self.header.user_header_length > 0:
-            offset += self.header.user_header_length
-
-        # 4. Parse records sequentially
         while offset < self.file_size:
             try:
                 # Store this record's position
-                self.record_offsets.append(offset)
+                record_offsets.append(offset)
 
-                # Parse record header
-                record_header = self.scan_record(self.mm, offset)
+                # Create a temporary Record object to get its size
+                record = Record(self.mm, offset, self.header.endian)
 
                 # Move to next record
-                offset += record_header.record_length * 4  # Length in bytes
+                offset += record.size
 
                 # Stop if this was the last record
-                if record_header.is_last_record:
+                if record.header.is_last_record:
                     break
 
             except Exception as e:
                 if self.verbose:
                     print(f"Error scanning record at offset 0x{offset:X}: {e}")
-                    print(make_hex_dump(self.mm[offset:offset+64], title="Data dump at this offset"))
                 raise
 
-    @staticmethod
-    def scan_record(mm: mmap.mmap, offset: int) -> RecordHeader:
-        """
-        Scan a record at the given offset and return its header.
+        return record_offsets
 
-        Args:
-            mm: Memory-mapped file
-            offset: Byte offset where the record starts
+    @property
+    def record_count(self) -> int:
+        """Get the number of records in this file."""
+        return len(self._record_offsets)
 
-        Returns:
-            RecordHeader object
+    def get_record(self, index: int) -> Record:
         """
-        return RecordHeader.parse(mm, offset)
-
-    def find_record(self, index: int) -> Tuple[int, int]:
-        """
-        Find a record by index and return its data offsets.
+        Get a record by index.
 
         Args:
             index: Record index (0-based)
 
         Returns:
-            Tuple of (start_offset, end_offset) for the record data
+            Record object
+
+        Raises:
+            IndexError: If index is out of range
         """
-        if index < 0 or index >= len(self.record_offsets):
-            raise IndexError(f"Record index {index} out of range (0-{len(self.record_offsets)-1})")
+        if index < 0 or index >= len(self._record_offsets):
+            raise IndexError(f"Record index {index} out of range (0-{len(self._record_offsets)-1})")
 
-        record_start = self.record_offsets[index]
-        record_header = self.scan_record(self.mm, record_start)
+        # Check if record is already cached
+        if index not in self._records:
+            offset = self._record_offsets[index]
+            self._records[index] = Record(self.mm, offset, self.header.endian)
 
-        # Calculate data start (after record header)
-        data_start = record_start + record_header.header_length * 4
+        return self._records[index]
 
-        # Skip over index array
-        data_start += record_header.index_array_length
-
-        # Skip over user header if present
-        data_start += record_header.user_header_length
-
-        # Calculate data end
-        if index < len(self.record_offsets) - 1:
-            data_end = self.record_offsets[index + 1]
-        else:
-            data_end = record_start + record_header.record_length * 4
-
-        return data_start, data_end
-
-    def parse_first_bank_header(self, record_index: int) -> Bank:
+    def get_records(self) -> List[Record]:
         """
-        Parse the first bank header within a record.
-
-        Args:
-            record_index: Record index (0-based)
+        Get all records in the file.
 
         Returns:
-            Bank object with header information
+            List of Record objects
         """
-        data_start, _ = self.find_record(record_index)
-        return Bank.from_buffer(self.mm, data_start, self.header.endian)
+        return [self.get_record(i) for i in range(len(self._record_offsets))]
 
-    def get_event_offsets(self, record_index: int) -> List[int]:
+    def iter_records(self) -> Iterator[Record]:
         """
-        Get a list of event offsets within a record.
+        Iterate through all records in the file.
 
-        Args:
-            record_index: Record index (0-based)
+        Yields:
+            Record objects
+        """
+        for i in range(len(self._record_offsets)):
+            yield self.get_record(i)
+
+    def get_total_event_count(self) -> int:
+        """
+        Get the total number of events across all records.
 
         Returns:
-            List of byte offsets for each event in the record
+            Total event count
         """
-        if record_index < 0 or record_index >= len(self.record_offsets):
-            raise IndexError(f"Record index {record_index} out of range (0-{len(self.record_offsets)-1})")
+        if self._total_event_count is None:
+            self._total_event_count = 0
+            for record in self.iter_records():
+                self._total_event_count += record.event_count
 
-        record_offset = self.record_offsets[record_index]
-        record_header = self.scan_record(self.mm, record_offset)
+        return self._total_event_count
 
-        # Calculate data locations
-        data_start = record_offset + record_header.header_length * 4
-        index_start = data_start
-        index_end = index_start + record_header.index_array_length
-        content_start = index_end + record_header.user_header_length
-
-        # Parse event index
-        event_offsets = []
-
-        if record_header.index_array_length > 0:
-            # Parse from index array
-            event_count = record_header.index_array_length // 4
-            current_offset = content_start
-
-            for i in range(event_count):
-                length_offset = index_start + (i * 4)
-                event_length = struct.unpack(self.header.endian + 'I',
-                                             self.mm[length_offset:length_offset+4])[0]
-
-                # Store event offset
-                event_offsets.append(current_offset)
-
-                # Update cumulative offset for next event
-                current_offset += event_length
-
-        return event_offsets
-
-    def get_event(self, record_index: int, event_index: int) -> Optional[RocTimeSliceBank]:
+    def get_event(self, global_index: int) -> Tuple[Record, Event]:
         """
-        Get a parsed ROC Time Slice Bank for a specific event.
+        Get an event by global index across all records.
 
         Args:
-            record_index: Record index (0-based)
-            event_index: Event index within the record (0-based)
+            global_index: Global event index (0-based) across all records
 
         Returns:
-            RocTimeSliceBank object if parsing succeeds, None otherwise
+            Tuple of (Record, Event) objects
+
+        Raises:
+            IndexError: If global_index is out of range
         """
-        event_offsets = self.get_event_offsets(record_index)
+        if global_index < 0:
+            raise IndexError(f"Global event index {global_index} cannot be negative")
 
-        if event_index < 0 or event_index >= len(event_offsets):
-            raise IndexError(f"Event index {event_index} out of range (0-{len(event_offsets)-1})")
+        # Scan through records to find the record containing this event
+        current_index = 0
 
-        evt_offset = event_offsets[event_index]
+        for record_idx in range(len(self._record_offsets)):
+            record = self.get_record(record_idx)
+            event_count = record.event_count
 
-        try:
-            return RocTimeSliceBank(self.mm, evt_offset, self.header.endian)
-        except Exception as e:
-            if self.verbose:
-                print(f"Error parsing event as ROC Time Slice Bank: {e}")
-            return None
+            # Check if this event is in the current record
+            if current_index + event_count > global_index:
+                # Found the record containing this event
+                local_event_index = global_index - current_index
+                event = record.get_event(local_event_index)
+                return record, event
+
+            # Move to next record
+            current_index += event_count
+
+        # If we get here, the global_index is out of range
+        raise IndexError(f"Global event index {global_index} out of range (0-{current_index-1})")
+
+    def iter_events(self) -> Iterator[Tuple[Record, Event]]:
+        """
+        Iterate through all events in the file.
+
+        Yields:
+            Tuples of (Record, Event) objects
+        """
+        for record in self.iter_records():
+            for event in record.get_events():
+                yield record, event

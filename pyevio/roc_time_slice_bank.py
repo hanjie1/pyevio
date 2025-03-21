@@ -7,33 +7,21 @@ from pyevio.bank import Bank
 from pyevio.buffer_reader import BufferReader
 
 
-class StreamInfoBank:
+class StreamInfoBank(Bank):
     """Parses Stream Info Bank (SIB) within a ROC Time Slice Bank."""
 
-    def __init__(self, buffer: mmap.mmap, offset: int, endian: str = '<'):
+    def __init__(self, mm: mmap.mmap, offset: int, endian: str = '<'):
         """
         Initialize and parse a Stream Info Bank.
 
         Args:
-            buffer: Memory-mapped buffer
+            mm: Memory-mapped buffer
             offset: Byte offset where the SIB starts
             endian: Endianness ('<' for little endian, '>' for big endian)
         """
-        self.buffer = buffer
-        self.offset = offset
-        self.endian = endian
-        self.reader = BufferReader(buffer, offset)
+        super().__init__(mm, offset, endian)
 
-        # Parse SIB header
-        self.length = self.reader.read_uint32(0)
-        second_word = self.reader.read_uint32(1)
-
-        # Extract components from second word
-        self.tag = (second_word >> 16) & 0xFFFF  # Should be 0xFF30
-        self.data_type = (second_word >> 8) & 0xFF  # Should be 0x20
-        self.stream_status = second_word & 0xFF
-
-        # Validate SIB
+        # Validate SIB tag
         if self.tag != 0xFF30:
             raise ValueError(f"Invalid Stream Info Bank tag: 0x{self.tag:04X}, expected 0xFF30")
 
@@ -54,7 +42,7 @@ class StreamInfoBank:
         tss_offset = self.offset + 8
 
         # TSS Header (first word)
-        tss_header = struct.unpack(self.endian + 'I', self.buffer[tss_offset:tss_offset+4])[0]
+        tss_header = struct.unpack(self.endian + 'I', self.mm[tss_offset:tss_offset+4])[0]
         self.tss_tag = (tss_header >> 24) & 0xFF  # Should be 0x31
         self.tss_type = (tss_header >> 16) & 0xFF  # Should be 0x01
         self.tss_length = tss_header & 0xFFFF
@@ -64,11 +52,11 @@ class StreamInfoBank:
             raise ValueError(f"Invalid Time Slice Segment tag: 0x{self.tss_tag:02X}, expected 0x31")
 
         # Frame Number (second word)
-        self.frame_number = struct.unpack(self.endian + 'I', self.buffer[tss_offset+4:tss_offset+8])[0]
+        self.frame_number = struct.unpack(self.endian + 'I', self.mm[tss_offset+4:tss_offset+8])[0]
 
         # Timestamp (two words: 64 bits total)
-        timestamp_low = struct.unpack(self.endian + 'I', self.buffer[tss_offset+8:tss_offset+12])[0]
-        timestamp_high = struct.unpack(self.endian + 'I', self.buffer[tss_offset+12:tss_offset+16])[0]
+        timestamp_low = struct.unpack(self.endian + 'I', self.mm[tss_offset+8:tss_offset+12])[0]
+        timestamp_high = struct.unpack(self.endian + 'I', self.mm[tss_offset+12:tss_offset+16])[0]
 
         if self.endian == '<':
             # Little endian: low word first, then high word
@@ -86,7 +74,7 @@ class StreamInfoBank:
         ais_offset = self.tss_end_offset
 
         # AIS Header (first word)
-        ais_header = struct.unpack(self.endian + 'I', self.buffer[ais_offset:ais_offset+4])[0]
+        ais_header = struct.unpack(self.endian + 'I', self.mm[ais_offset:ais_offset+4])[0]
         self.ais_tag = (ais_header >> 24) & 0xFF  # Should be 0x41
         self.ais_type_info = (ais_header >> 16) & 0xFF  # Should be 0x85
         self.ais_length = ais_header & 0xFFFF
@@ -97,7 +85,7 @@ class StreamInfoBank:
 
         # Extract type info components
         self.padding = (self.ais_type_info >> 6) & 0x3  # Top 2 bits
-        self.data_type = self.ais_type_info & 0x3F  # Lower 6 bits (should be 5 = unsigned short)
+        self.ais_data_type = self.ais_type_info & 0x3F  # Lower 6 bits (should be 5 = unsigned short)
 
         # Parse payload infos
         self.payload_infos = []
@@ -111,7 +99,7 @@ class StreamInfoBank:
         # Read payload infos
         for i in range(words_needed):
             word_offset = ais_offset + 4 + (i * 4)
-            word = struct.unpack(self.endian + 'I', self.buffer[word_offset:word_offset+4])[0]
+            word = struct.unpack(self.endian + 'I', self.mm[word_offset:word_offset+4])[0]
 
             # Each word contains two 16-bit payloads (unless it's the last word with odd num_payloads)
             # Extract payloads in order (depending on endianness)
@@ -158,75 +146,22 @@ class StreamInfoBank:
             'raw_value': payload_info
         })
 
-    def __str__(self) -> str:
-        """Return string representation of the Stream Info Bank."""
-        timestamp_seconds = self.timestamp / 1e9  # Convert to seconds (assuming nanoseconds)
-        timestamp_str = datetime.fromtimestamp(timestamp_seconds).strftime('%Y-%m-%d %H:%M:%S.%f')
 
-        result = [
-            f"Stream Info Bank (0xFF30):",
-            f"  Length:         {self.length} words",
-            f"  Tag:            0x{self.tag:04X}",
-            f"  Data Type:      0x{self.data_type:02X}",
-            f"  Stream Status:  0x{self.stream_status:02X}",
-            f"    Error Flag:   {self.error_flag}",
-            f"    Total Streams: {self.total_streams}",
-            f"    Stream Mask:  0x{self.stream_mask:01X}",
-            f"  Time Slice Segment:",
-            f"    Tag:          0x{self.tss_tag:02X}",
-            f"    Type:         0x{self.tss_type:02X}",
-            f"    Length:       {self.tss_length} words",
-            f"    Frame Number: {self.frame_number}",
-            f"    Timestamp:    {self.timestamp} ({timestamp_str})",
-            f"  Aggregation Info Segment:",
-            f"    Tag:          0x{self.ais_tag:02X}",
-            f"    Type Info:    0x{self.ais_type_info:02X} (Padding: {self.padding}, Data Type: {self.data_type})",
-            f"    Length:       {self.ais_length} payloads",
-            f"    Payload Infos ({len(self.payload_infos)}):"
-        ]
-
-        for i, info in enumerate(self.payload_infos):
-            result.append(f"      Payload {i}:")
-            result.append(f"        Module ID:  {info['module_id']}")
-            result.append(f"        Bond:       {info['bond']}")
-            result.append(f"        Lane ID:    {info['lane_id']}")
-            result.append(f"        Port Number: {info['port_num']}")
-            result.append(f"        Raw Value:  0x{info['raw_value']:04X}")
-
-        return "\n".join(result)
-
-
-class PayloadBank:
+class PayloadBank(Bank):
     """Parses Payload Banks within a ROC Time Slice Bank."""
 
-    def __init__(self, buffer: mmap.mmap, offset: int, endian: str = '<', payload_info: Dict = None):
+    def __init__(self, mm: mmap.mmap, offset: int, endian: str = '<', payload_info: Dict = None):
         """
         Initialize and parse a Payload Bank.
 
         Args:
-            buffer: Memory-mapped buffer
+            mm: Memory-mapped buffer
             offset: Byte offset where the Payload Bank starts
             endian: Endianness ('<' for little endian, '>' for big endian)
             payload_info: Optional payload info dictionary from AIS
         """
-        self.buffer = buffer
-        self.offset = offset
-        self.endian = endian
-        self.reader = BufferReader(buffer, offset)
+        super().__init__(mm, offset, endian)
         self.payload_info = payload_info
-
-        # Parse Payload Bank header
-        self.length = self.reader.read_uint32(0)
-        second_word = self.reader.read_uint32(1)
-
-        # Extract components from second word
-        self.tag = (second_word >> 16) & 0xFFFF
-        self.data_type = (second_word >> 8) & 0xFF  # Should be 0x0
-        self.stream_status = second_word & 0xFF
-
-        # Data starts after header (2 words)
-        self.data_offset = offset + 8
-        self.data_length = (self.length - 1) * 4  # Length in bytes, excluding header
 
         # For FADC250 data, we expect unsigned shorts (16-bit)
         # But we need to know the data format to interpret correctly
@@ -286,7 +221,7 @@ class PayloadBank:
         data = []
         for i in range(self.num_samples):
             sample_offset = self.data_offset + (i * 2)
-            sample = struct.unpack(self.endian + 'H', self.buffer[sample_offset:sample_offset+2])[0]
+            sample = struct.unpack(self.endian + 'H', self.mm[sample_offset:sample_offset+2])[0]
             data.append(sample)
 
         # If specific channel requested, extract only that channel
@@ -319,7 +254,7 @@ class PayloadBank:
 
         # Read all data samples as 16-bit values
         data = np.frombuffer(
-            self.buffer[self.data_offset:self.data_offset + self.data_length],
+            self.mm[self.data_offset:self.data_offset + self.data_length],
             dtype=np.uint16
         )
 
@@ -331,69 +266,29 @@ class PayloadBank:
 
         return data
 
-    def __str__(self) -> str:
-        """Return string representation of the Payload Bank."""
-        result = [
-            f"Payload Bank:",
-            f"  Length:        {self.length} words ({self.data_length} bytes of data)",
-            f"  Tag:           0x{self.tag:04X}",
-            f"  Data Type:     0x{self.data_type:02X}",
-            f"  Stream Status: 0x{self.stream_status:02X}"
-        ]
 
-        if self.payload_info:
-            result.append(f"  Payload Info:")
-            result.append(f"    Module ID:    {self.payload_info['module_id']}")
-            result.append(f"    Bond:         {self.payload_info['bond']}")
-            result.append(f"    Lane ID:      {self.payload_info['lane_id']}")
-            result.append(f"    Port Number:  {self.payload_info['port_num']}")
-
-        if hasattr(self, 'num_samples'):
-            result.append(f"  Data Analysis:")
-            result.append(f"    Total Samples: {self.num_samples}")
-            if hasattr(self, 'channels'):
-                result.append(f"    Channels:     {self.channels}")
-            if hasattr(self, 'samples_per_channel'):
-                result.append(f"    Samples/Chan: {self.samples_per_channel}")
-
-            # Add a preview of the first few and last few samples
-            data = self.get_waveform_data()
-            if data:
-                preview_count = min(5, len(data))
-                preview_start = ", ".join([f"0x{x:04X}" for x in data[:preview_count]])
-                preview_end = ", ".join([f"0x{x:04X}" for x in data[-preview_count:]])
-                result.append(f"    Data Preview:  [{preview_start}, ... {preview_end}]")
-
-        return "\n".join(result)
-
-
-class RocTimeSliceBank:
+class RocTimeSliceBank(Bank):
     """
     Class for parsing and analyzing ROC Time Slice Bank data.
+
+    A ROC Time Slice Bank contains:
+    1. A Stream Info Bank (SIB)
+    2. Multiple Payload Banks
     """
 
-    def __init__(self, buffer: mmap.mmap, offset: int, endian: str = '<'):
+    # Tag value for ROC Time Slice Banks
+    TAG = 0xFF30
+
+    def __init__(self, mm: mmap.mmap, offset: int, endian: str = '<'):
         """
         Initialize a RocTimeSliceBank parser.
 
         Args:
-            buffer: Memory-mapped buffer
+            mm: Memory-mapped buffer
             offset: Byte offset where the bank starts
             endian: Endianness ('<' for little endian, '>' for big endian)
         """
-        self.buffer = buffer
-        self.offset = offset
-        self.endian = endian
-        self.reader = BufferReader(buffer, offset)
-
-        # Parse bank header
-        self.length = self.reader.read_uint32(0)
-        second_word = self.reader.read_uint32(1)
-
-        # Extract components from second word
-        self.roc_id = (second_word >> 16) & 0xFFFF
-        self.data_type = (second_word >> 8) & 0xFF  # Should be 0x10 (Bank of banks)
-        self.stream_status = second_word & 0xFF
+        super().__init__(mm, offset, endian)
 
         # Validate ROC Time Slice Bank
         if self.data_type != 0x10:
@@ -405,7 +300,7 @@ class RocTimeSliceBank:
         self.stream_mask = self.stream_status & 0xF
 
         # Parse Stream Info Bank (starts after ROC TS Bank header)
-        self.sib = StreamInfoBank(buffer, offset + 8, endian)
+        self.sib = StreamInfoBank(mm, offset + 8, endian)
 
         # Parse Payload Banks
         self._parse_payload_banks()
@@ -425,17 +320,16 @@ class RocTimeSliceBank:
                 break
 
             try:
-                payload_bank = PayloadBank(self.buffer, current_offset, self.endian, payload_info)
+                payload_bank = PayloadBank(self.mm, current_offset, self.endian, payload_info)
                 self.payload_banks.append(payload_bank)
 
                 # Move to next bank
                 current_offset += payload_bank.length * 4
             except Exception as e:
                 # If there's an error parsing a payload bank, log it and continue
-                print(f"Error parsing payload bank at offset 0x{current_offset:X}: {e}")
-                # Try to recover - skip this bank
-                # Since we don't know its length, we might have to stop here
-                break
+                if self.payload_banks:
+                    break
+                raise
 
     def get_timestamp(self) -> int:
         """Get the timestamp from the Stream Info Bank."""
@@ -476,26 +370,3 @@ class RocTimeSliceBank:
             result.append(payload.to_numpy())
 
         return result
-
-    def __str__(self) -> str:
-        """Return string representation of the ROC Time Slice Bank."""
-        result = [
-            f"ROC Time Slice Bank:",
-            f"  Length:        {self.length} words ({self.length * 4} bytes)",
-            f"  ROC ID:        {self.roc_id}",
-            f"  Data Type:     0x{self.data_type:02X} (Bank of banks)",
-            f"  Stream Status: 0x{self.stream_status:02X}",
-            f"    Error Flag:  {self.error_flag}",
-            f"    Total Streams: {self.total_streams}",
-            f"    Stream Mask: 0x{self.stream_mask:01X}",
-            f"  Timestamp:     {self.sib.timestamp} ({self.get_formatted_timestamp()})",
-            f"  Frame Number:  {self.sib.frame_number}",
-            f"  Payload Banks: {len(self.payload_banks)}"
-        ]
-
-        for i, payload in enumerate(self.payload_banks):
-            result.append(f"  Payload Bank {i}:")
-            payload_str = str(payload).replace("\n", "\n    ")
-            result.append(f"    {payload_str}")
-
-        return "\n".join(result)
