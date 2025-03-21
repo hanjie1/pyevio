@@ -12,6 +12,82 @@ from pyevio.core import EvioFile
 from pyevio.roc_time_slice_bank import RocTimeSliceBank
 from pyevio.utils import make_hex_dump, print_offset_hex
 
+def decode_bank_structure(mm, offset, endian, depth=0, max_depth=10):
+    """
+    Recursively decode and display EVIO bank structure.
+
+    Args:
+        mm: Memory-mapped file
+        offset: Starting byte offset
+        endian: Endianness ('<' or '>')
+        depth: Current depth level (for indentation)
+        max_depth: Maximum recursion depth
+
+    Returns:
+        Tuple of (next_offset, formatted_output)
+    """
+    if depth > max_depth:
+        return offset, ["  " * depth + "[Maximum depth reached]"]
+
+    output = []
+
+    try:
+        # Read bank length
+        length = struct.unpack(f"{endian}I", mm[offset:offset+4])[0]
+
+        # Read bank header
+        header_word = struct.unpack(f"{endian}I", mm[offset+4:offset+8])[0]
+        tag = (header_word >> 16) & 0xFFFF
+        data_type = (header_word >> 8) & 0xFF
+        num = header_word & 0xFF
+
+        # Determine bank type
+        bank_type = "Unknown"
+        if data_type == 0x10:
+            bank_type = "Bank of banks"
+        elif data_type == 0x20:
+            bank_type = "Segment"
+        elif (tag & 0xFF00) == 0xFF00:
+            tag_type = tag & 0x00FF
+            if tag_type == 0x30:
+                bank_type = "Stream Info Bank"
+            elif tag_type == 0x31:
+                bank_type = "Time Slice Segment"
+            elif tag_type == 0x41 or tag_type == 0x85:
+                bank_type = "Aggregation Info Segment"
+
+        # Format bank header information
+        header_info = f"0x{offset:08X}: Bank [Length: {length}, Tag: 0x{tag:04X}, Type: 0x{data_type:02X}, Num: 0x{num:02X}] - {bank_type}"
+        output.append("  " * depth + header_info)
+
+        # Calculate data offset
+        data_offset = offset + 8  # After bank header
+
+        # For container banks, recursively process children
+        if data_type == 0x10 or data_type == 0x20 or data_type == 0xE or data_type == 0xD:
+            child_offset = data_offset
+            end_offset = offset + (length * 4)
+
+            while child_offset < end_offset:
+                next_offset, child_output = decode_bank_structure(mm, child_offset, endian, depth + 1, max_depth)
+                output.extend(child_output)
+                child_offset = next_offset
+        else:
+            # For leaf banks, show data preview
+            data_size = (length - 1) * 4  # Length includes header word
+            data_preview = mm[data_offset:data_offset+min(16, data_size)]
+            hex_preview = " ".join([f"{b:02X}" for b in data_preview])
+            if data_size > 16:
+                hex_preview += " ..."
+            output.append("  " * (depth + 1) + f"Data: [{hex_preview}] ({data_size} bytes)")
+
+        # Return next offset and output
+        return offset + (length * 4), output
+
+    except Exception as e:
+        output.append("  " * depth + f"[Error decoding bank at 0x{offset:08X}: {str(e)}]")
+        return offset + 4, output
+
 
 @click.command(name="debug")
 @click.argument("filename", type=click.Path(exists=True))
@@ -90,6 +166,8 @@ def debug_command(ctx, filename, record_index, event, payload, hexdump, verbose)
                     index_table.add_row("...", "...")
 
             console.print(index_table)
+        else:
+            print("Index array len: 0")
 
         # Handle event parameter - scan specific event or all events
         events_to_scan = []
@@ -117,7 +195,15 @@ def debug_command(ctx, filename, record_index, event, payload, hexdump, verbose)
             if evt_idx < len(event_offsets) - 1:
                 evt_end = event_offsets[evt_idx + 1]
 
-            console.print(f"[bold]Offset: [green]0x{evt_offset:X}[/green], Size: [green]{evt_end - evt_offset}[/green] bytes[/bold]")
+            console.print(f"[bold]Offset: [green]0x{evt_offset:X}[{evt_offset//4}][/green], Size: [green]{evt_end - evt_offset}[/green] bytes[/bold]")
+
+            # Display structured bank decoding
+            console.print("\n[bold]Event Bank Structure:[/bold]")
+            _, bank_structure = decode_bank_structure(evio_file.mm, evt_offset, evio_file.header.endian)
+            for line in bank_structure:
+                console.print(line)
+
+            print_offset_hex(evio_file.mm, evt_offset, evt_length_bytes//4, "Event content HEX:")
 
             # Try to parse the event as a ROC Time Slice Bank
             try:

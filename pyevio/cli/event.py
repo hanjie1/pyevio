@@ -13,7 +13,7 @@ from PIL import Image
 
 from pyevio.core import EvioFile
 from pyevio.roc_time_slice_bank import RocTimeSliceBank
-from pyevio.utils import make_hex_dump
+from pyevio.utils import make_hex_dump, print_offset_hex
 
 
 @click.command(name="event")
@@ -78,16 +78,19 @@ def event_command(ctx, filename, record, event, payload, channel, hexdump, plot,
             raise click.BadParameter(f"Event {event} out of range (0-{len(event_offsets)-1})")
 
         # Get event offset and length
-        evt_offset = event_offsets[event]
-        evt_length = event_lengths[event]
-        evt_end = evt_offset + evt_length
+        evt_offset_bytes = event_offsets[event]
+        evt_offset_words = event_offsets[event]//4
+        evt_length_bytes = event_lengths[event]
+        evt_end = evt_offset_bytes + evt_length_bytes
 
-        console.print(f"[bold cyan]Event #{event} in Record #{record}[/bold cyan]")
-        console.print(f"[bold]Offset: [green]0x{evt_offset:X}[/green], Length: [green]{evt_length}[/green] bytes[/bold]")
+        console.print(f"[bold cyan]Record #{record} Event #{event}[/bold cyan]")
+        console.print(f"[bold]Offset: [green]0x{evt_offset_bytes:X}[{evt_offset_words}][/green], Length: [green]{evt_length_bytes}[/green] bytes[/bold]")
+        if hexdump:
+            print_offset_hex(evio_file.mm, evt_offset_bytes, evt_length_bytes//4, "Event content HEX:")
 
         # Try to parse the event as a ROC Time Slice Bank
         try:
-            roc_bank = RocTimeSliceBank(evio_file.mm, evt_offset, evio_file.header.endian)
+            roc_bank = RocTimeSliceBank(evio_file.mm, evt_offset_bytes, evio_file.header.endian)
 
             # Create a detailed report
             console.print()
@@ -258,5 +261,5 @@ def event_command(ctx, filename, record, event, payload, channel, hexdump, plot,
             if hexdump:
                 console.print()
                 console.print(f"[bold]Event Hexdump (First 256 bytes):[/bold]")
-                event_data = evio_file.mm[evt_offset:min(evt_offset+256, evt_end)]
+                event_data = evio_file.mm[evt_offset_bytes:min(evt_offset_bytes+256, evt_end)]
                 console.print(make_hex_dump(event_data, title=f"Event #{event} Data"))
