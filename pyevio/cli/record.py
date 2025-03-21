@@ -9,7 +9,7 @@ from datetime import datetime
 
 from pyevio.core import EvioFile
 from pyevio.roc_time_slice_bank import RocTimeSliceBank
-from pyevio.utils import make_hex_dump
+from pyevio.utils import make_hex_dump, print_offset_hex
 
 
 @click.command(name="record")
@@ -74,12 +74,16 @@ def record_command(ctx, filename, record, summary, events, limit, hexdump, verbo
 
             # If hexdump requested, show record header hexdump
             if hexdump:
-                console.print()
-                console.print(f"[bold]Record Header Hexdump:[/bold] (offset: {record_offset})")
-                header_data = evio_file.mm[record_offset:record_offset + record_header.header_length * 4]
-                console.print(make_hex_dump(header_data, title="Record Header"))
+                print_offset_hex(evio_file.mm, record_offset, record_header.header_length, "Record Header")
 
         # Calculate record data range
+        """
+            The record header ends at offset e.g. 0x0000006c (word 27)
+            Then comes the index array e.g. word 28(which appears to be 4 bytes long based on your output)
+            The index array in an EVIO record contains the lengths of all events in that record.
+            After the index array, there might be a user header (which could be 0 bytes in your case)
+            Then the actual data content starts at offset 0x00000074 (word 29)
+        """
         data_start = record_offset + record_header.header_length * 4
         index_start = data_start
         index_end = index_start + record_header.index_array_length
@@ -88,8 +92,8 @@ def record_command(ctx, filename, record, summary, events, limit, hexdump, verbo
 
         if verbose:
             console.print()
-            console.print(f"[bold]Data after header hexdump:[/bold] (offset: {data_start})")
-            print(make_hex_dump(evio_file.mm[content_start:content_start+128]))
+            print_offset_hex(evio_file.mm, index_start, 30, "Data after header hexdump")
+
 
         # Parse event index array
         event_offsets = []
@@ -102,6 +106,7 @@ def record_command(ctx, filename, record, summary, events, limit, hexdump, verbo
             events_table = Table(title="Events in Record", box=box.SIMPLE)
             events_table.add_column("Event #", style="cyan")
             events_table.add_column("Offset", style="green")
+            events_table.add_column("[words]", style="green")
             events_table.add_column("Length (bytes)", style="yellow")
             events_table.add_column("Type", style="magenta")
 
@@ -157,11 +162,12 @@ def record_command(ctx, filename, record, summary, events, limit, hexdump, verbo
                     events_table.add_row(
                         str(i),
                         f"0x{event_offsets[i]:X}",
+                        str(event_offsets[i]//4),
                         str(event_length),
                         event_type
                     )
                 elif i == max_display // 2 and event_count > max_display:
-                    events_table.add_row("...", "...", "...", "...")
+                    events_table.add_row("...", "...", "...", "...", "...")
 
             console.print(events_table)
 

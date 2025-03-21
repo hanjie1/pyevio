@@ -10,18 +10,18 @@ from datetime import datetime
 
 from pyevio.core import EvioFile
 from pyevio.roc_time_slice_bank import RocTimeSliceBank
-from pyevio.utils import make_hex_dump
+from pyevio.utils import make_hex_dump, print_offset_hex
 
 
 @click.command(name="debug")
 @click.argument("filename", type=click.Path(exists=True))
-@click.option("--record", "-r", type=int, required=True, help="Record number to debug")
+@click.option("--record", "-r", "record_index", type=int, required=True, help="Record number to debug")
 @click.option("--event", "-e", type=int, help="Event number within the record (if omitted, scans all events)")
 @click.option("--payload", "-p", type=int, help="Payload number to focus on (if omitted, shows all payloads)")
 @click.option("--hexdump/--no-hexdump", default=False, help="Show hex dump of data structures")
 @click.option("--verbose", "-v", is_flag=True, help="Enable verbose output")
 @click.pass_context
-def debug_command(ctx, filename, record, event, payload, hexdump, verbose):
+def debug_command(ctx, filename, record_index, event, payload, hexdump, verbose):
     """
     Debug EVIO file structure at a detailed level.
 
@@ -33,23 +33,21 @@ def debug_command(ctx, filename, record, event, payload, hexdump, verbose):
     console = Console()
 
     with EvioFile(filename, verbose) as evio_file:
-        if record < 0 or record >= len(evio_file.record_offsets):
-            raise click.BadParameter(f"Record {record} out of range (0-{len(evio_file.record_offsets)-1})")
+        if record_index < 0 or record_index >= len(evio_file.record_offsets):
+            raise click.BadParameter(f"Record {record_index} out of range (0-{len(evio_file.record_offsets) - 1})")
 
-        record_offset = evio_file.record_offsets[record]
+        record_offset = evio_file.record_offsets[record_index]
         record_header = evio_file.scan_record(evio_file.mm, record_offset)
 
         # Display record header information
-        console.print(f"[bold cyan]Record #{record} Analysis[/bold cyan]")
+        console.print(f"[bold cyan]Record #{record_index} Analysis[/bold cyan]")
         console.print(f"[bold]Offset: [green]0x{record_offset:X}[/green], Length: [green]{record_header.record_length}[/green] words[/bold]")
         console.print(f"[bold]Type: [green]{record_header.event_type}[/green], Events: [green]{record_header.event_count}[/green][/bold]")
 
         # If hexdump requested, show record header hexdump
         if hexdump:
             console.print()
-            console.print("[bold]Record Header Hexdump:[/bold]")
-            header_data = evio_file.mm[record_offset:record_offset + record_header.header_length * 4]
-            console.print(make_hex_dump(header_data, title="Record Header"))
+            print_offset_hex(evio_file.mm, record_offset, record_header.header_length, "Record Header:")
 
         # Calculate record data range (start after record header + index array + user header)
         data_start = record_offset + record_header.header_length * 4

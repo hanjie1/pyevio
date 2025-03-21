@@ -65,8 +65,9 @@ def info_command(ctx, filename, verbose, hexdump):
         records_table = Table(box=box.SIMPLE)
         records_table.add_column("Record #", style="cyan")
         records_table.add_column("Offset", style="green")
+        records_table.add_column("[Words]", style="green")
         records_table.add_column("Length (words)", style="yellow")
-        records_table.add_column("Events", style="magenta")
+        records_table.add_column("Events")
         records_table.add_column("Type", style="blue")
         records_table.add_column("Last?", style="red")
 
@@ -78,6 +79,7 @@ def info_command(ctx, filename, verbose, hexdump):
                     records_table.add_row(
                         str(i),
                         f"0x{offset:X}",
+                        str(int(offset/4)),
                         str(record_header.record_length),
                         str(record_header.event_count),
                         record_header.event_type,

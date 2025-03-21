@@ -14,7 +14,8 @@ Provide a command-line interface (CLI) for file and record-level inspection.
 
 - Read non-compressed EVIO v6 files efficiently (GB+ scale)
 - Provide human-friendly CLI inspection tools
-- Convert "ROC Time Slice Bank" data to NumPy arrays
+- Convert streaming like "ROC Time Slice Bank" or triggered data to NumPy arrays
+- In ideal world find ways to convert all to numpy, awkward, etc. 
 - Zero-write capability in v1 (read-only implementation)
 
 ---
@@ -32,6 +33,7 @@ Provide a command-line interface (CLI) for file and record-level inspection.
     - 64-bit timestamp extraction
     - 16-bit waveform data arrays
 
+
 ## **Functional Requirements**
 
 1. **File Header Parsing**
@@ -42,20 +44,24 @@ Provide a command-line interface (CLI) for file and record-level inspection.
           Integers.
     - Validate **Magic Number** (“EVIO”) and **Version** (must be 6).
     - Provide a method to read & expose these fields as Python attributes.
+
 2. **Record Parsing**
 
     - Identify each record’s **header** and basic metadata (length in 32-bit words, data type, bit
       info, etc.).
     - Maintain offsets for each record to allow **sequential** or **random access**.
+
 3. **Bank & Sub-Bank Hierarchy**
 
     - Parse nested **Banks/Segments/TagSegments**.
     - Maintain a **tree-like** object structure reflecting the nested hierarchy.
     - Expose key fields (`tag`, `data_type`, `length`, offsets).
+
 4. **ROC Time Slice Bank Support**
 
     - Specifically handle banks with known tags (e.g., `0x10C0`) containing FADC250 data.
     - Extract timestamps and channel data in a structured way.
+
 5. **CLI Tools**
 
     - **`pyevio info FILE`**

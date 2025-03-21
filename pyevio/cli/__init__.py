@@ -7,6 +7,7 @@ from pyevio.cli.dump import dump_command
 from pyevio.cli.debug import debug_command
 from pyevio.cli.record import record_command
 from pyevio.cli.event import event_command
+from pyevio.cli.hex import hex_command
 
 
 @click.group()
@@ -26,6 +27,7 @@ cli.add_command(dump_command)
 cli.add_command(debug_command)
 cli.add_command(record_command)
 cli.add_command(event_command)
+cli.add_command(hex_command)
 
 
 # Entry point for the CLI
