@@ -10,6 +10,128 @@ from pyevio.core import EvioFile
 from pyevio.roc_time_slice_bank import RocTimeSliceBank
 from pyevio.utils import make_hex_dump
 
+def display_bank_structure(console, bank, depth=0, max_depth=5, preview=3, hexdump=False, evio_file=None):
+    """
+    Display bank structure in a hierarchical format.
+
+    Args:
+        console: Rich console for output
+        bank: Bank object to display
+        depth: Current depth level
+        max_depth: Maximum depth to display
+        preview: Number of elements to preview
+        hexdump: Whether to show hex dumps
+        evio_file: EvioFile object for hexdumps
+    """
+    # Create prefix based on depth
+    prefix = "  " * depth
+
+    # Display bank information
+    console.print(f"{prefix}[bold]Bank 0x{bank.tag:04X} ({get_bank_type_name(bank)})[/bold]")
+    console.print(f"{prefix}  Offset: 0x{bank.offset:X}[{bank.offset//4}], Length: {bank.length} words")
+
+    # If this is a container bank, recursively display children
+    if bank.is_container() and depth < max_depth:
+        children = bank.get_children()
+
+        if not children:
+            console.print(f"{prefix}  [dim]No child banks[/dim]")
+            return
+
+        console.print(f"{prefix}  [bold]{len(children)} child banks:[/bold]")
+
+        # Display each child (up to a limit)
+        child_limit = min(len(children), preview * 2)
+        for i, child in enumerate(children):
+            if i < preview or i >= len(children) - preview or len(children) <= preview * 2:
+                display_bank_structure(
+                    console, child, depth + 1, max_depth, preview, hexdump, evio_file
+                )
+            elif i == preview and len(children) > preview * 2:
+                console.print(f"{prefix}    [dim]... {len(children) - (preview * 2)} more banks ...[/dim]")
+
+    # If this is a data bank, show preview
+    elif depth < max_depth:
+        # Try to get data as numpy array for better display
+        data = bank.to_numpy()
+        if data is not None:
+            # Show preview of data
+            preview_count = min(preview, len(data))
+            data_preview = ", ".join([f"{x}" for x in data[:preview_count]])
+
+            if len(data) > preview_count:
+                data_preview += f", ... ({len(data) - preview_count} more values)"
+
+            console.print(f"{prefix}  Data: [{data_preview}]")
+
+        # Show hexdump if requested
+        if hexdump and evio_file:
+            display_len = min(16, bank.data_length // 4)
+            if display_len > 0:
+                print_offset_hex(evio_file.mm, bank.data_offset, display_len,
+                                 f"{prefix}Bank Data at 0x{bank.data_offset:X}[{bank.data_offset//4}]")
+
+def display_bank_structure(console, bank, depth=0, max_depth=5, preview=3, hexdump=False, evio_file=None):
+    """
+    Display bank structure in a hierarchical format.
+
+    Args:
+        console: Rich console for output
+        bank: Bank object to display
+        depth: Current depth level
+        max_depth: Maximum depth to display
+        preview: Number of elements to preview
+        hexdump: Whether to show hex dumps
+        evio_file: EvioFile object for hexdumps
+    """
+    # Create prefix based on depth
+    prefix = "  " * depth
+
+    # Display bank information
+    console.print(f"{prefix}[bold]Bank 0x{bank.tag:04X} ({get_bank_type_name(bank)})[/bold]")
+    console.print(f"{prefix}  Offset: 0x{bank.offset:X}[{bank.offset//4}], Length: {bank.length} words")
+
+    # If this is a container bank, recursively display children
+    if bank.is_container() and depth < max_depth:
+        children = bank.get_children()
+
+        if not children:
+            console.print(f"{prefix}  [dim]No child banks[/dim]")
+            return
+
+        console.print(f"{prefix}  [bold]{len(children)} child banks:[/bold]")
+
+        # Display each child (up to a limit)
+        child_limit = min(len(children), preview * 2)
+        for i, child in enumerate(children):
+            if i < preview or i >= len(children) - preview or len(children) <= preview * 2:
+                display_bank_structure(
+                    console, child, depth + 1, max_depth, preview, hexdump, evio_file
+                )
+            elif i == preview and len(children) > preview * 2:
+                console.print(f"{prefix}    [dim]... {len(children) - (preview * 2)} more banks ...[/dim]")
+
+    # If this is a data bank, show preview
+    elif depth < max_depth:
+        # Try to get data as numpy array for better display
+        data = bank.to_numpy()
+        if data is not None:
+            # Show preview of data
+            preview_count = min(preview, len(data))
+            data_preview = ", ".join([f"{x}" for x in data[:preview_count]])
+
+            if len(data) > preview_count:
+                data_preview += f", ... ({len(data) - preview_count} more values)"
+
+            console.print(f"{prefix}  Data: [{data_preview}]")
+
+        # Show hexdump if requested
+        if hexdump and evio_file:
+            display_len = min(16, bank.data_length // 4)
+            if display_len > 0:
+                print_offset_hex(evio_file.mm, bank.data_offset, display_len,
+                                 f"{prefix}Bank Data at 0x{bank.data_offset:X}[{bank.data_offset//4}]")
+
 
 @click.command(name="dump")
 @click.argument("filename", type=click.Path(exists=True))
@@ -28,187 +150,76 @@ def dump_command(ctx, filename, record, depth, events, color, preview, hexdump, 
     console = Console(highlight=color)
 
     with EvioFile(filename, verbose) as evio_file:
-        if record < 0 or record >= len(evio_file.record_offsets):
-            raise click.BadParameter(f"Record {record} out of range (0-{len(evio_file.record_offsets)-1})")
+        # Validate record index
+        if record < 0 or record >= evio_file.record_count:
+            raise click.BadParameter(f"Record {record} out of range (0-{evio_file.record_count-1})")
 
-        record_offset = evio_file.record_offsets[record]
-        record_header = evio_file.scan_record(evio_file.mm, record_offset)
+        # Get the record object
+        record_obj = evio_file.get_record(record)
 
-        console.print(f"[bold]Record #{record} [Offset: 0x{record_offset:X}, Length: {record_header.record_length} words][/bold]")
-        console.print(f"[bold]Type: {record_header.event_type}, Events: {record_header.event_count}[/bold]")
+        console.print(f"[bold]Record #{record} [Offset: 0x{record_obj.offset:X}[{record_obj.offset//4}], Length: {record_obj.header.record_length} words][/bold]")
+        console.print(f"[bold]Type: {record_obj.header.event_type}, Events: {record_obj.event_count}[/bold]")
 
-        # Get record data range (after header, index array, and user header)
-        data_start = record_offset + record_header.header_length * 4
-        index_start = data_start
-        index_end = index_start + record_header.index_array_length
-        content_start = index_end + record_header.user_header_length
-        data_end = record_offset + record_header.record_length * 4
-
-        # If hexdump requested, show record header
+        # Show hexdump of record header if requested
         if hexdump:
             console.print()
-            console.print("[bold]Record Header Hexdump:[/bold]")
-            header_data = evio_file.mm[record_offset:record_offset + record_header.header_length * 4]
-            console.print(make_hex_dump(header_data, title="Record Header"))
-
-        # Parse event index array to get event offsets
-        event_offsets = []
-        event_lengths = []
-
-        if record_header.index_array_length > 0:
-            # Parse events from index array
-            event_count = record_header.index_array_length // 4
-            current_offset = content_start
-
-            for i in range(event_count):
-                length_offset = index_start + (i * 4)
-                event_length = struct.unpack(evio_file.header.endian + 'I',
-                                             evio_file.mm[length_offset:length_offset+4])[0]
-
-                # Store event offset and length
-                event_offsets.append(current_offset)
-                event_lengths.append(event_length)
-
-                # Update cumulative offset for next event
-                current_offset += event_length
-
-            # Show event index summary
-            console.print()
-            console.print(f"[bold]Event Index: {len(event_offsets)} events found[/bold]")
+            print_offset_hex(evio_file.mm, record_obj.offset, record_obj.header.header_length, "Record Header")
 
         # Determine which events to dump
-        events_to_dump = []
-        if events == 0:
-            # Dump all events (up to a reasonable limit to prevent overwhelming output)
-            max_events = min(len(event_offsets), 20)
-            events_to_dump = list(range(max_events))
-        else:
-            # Dump the first N events
-            max_events = min(events, len(event_offsets))
-            events_to_dump = list(range(max_events))
+        event_count = min(events, record_obj.event_count) if events > 0 else record_obj.event_count
+        events_to_dump = list(range(min(event_count, 20)))  # Limit to 20 max
 
         # Dump each event
         for event_idx in events_to_dump:
-            if event_idx >= len(event_offsets):
-                break
-
-            evt_offset = event_offsets[event_idx]
-            evt_length = event_lengths[event_idx]
-            evt_end = evt_offset + evt_length
-
-            console.print()
-            console.print(f"[bold yellow]Event #{event_idx} [Offset: 0x{evt_offset:X}, Length: {evt_length} bytes][/bold yellow]")
-
-            # Try to parse the event as a ROC Time Slice Bank
             try:
-                roc_bank = RocTimeSliceBank(evio_file.mm, evt_offset, evio_file.header.endian)
+                event_obj = record_obj.get_event(event_idx)
 
-                # Create a hierarchical tree view of the bank structure
-                tree = Tree(f"[bold]ROC Time Slice Bank (ROC ID: {roc_bank.roc_id})[/bold]")
+                console.print()
+                console.print(f"[bold yellow]Event #{event_idx} [Offset: 0x{event_obj.offset:X}[{event_obj.offset//4}], Length: {event_obj.length} bytes][/bold yellow]")
 
-                # Add Stream Info Bank to tree
-                sib_node = tree.add(f"[bold]Stream Info Bank (0xFF30)[/bold]")
-
-                # Add Time Slice Segment info
-                tss_node = sib_node.add(f"Time Slice Segment (0x31)")
-                tss_node.add(f"Frame Number: {roc_bank.sib.frame_number}")
-
-                # Format timestamp for display
-                timestamp_seconds = roc_bank.sib.timestamp / 1e9  # Convert to seconds (assuming nanoseconds)
-                timestamp_str = datetime.fromtimestamp(timestamp_seconds).strftime('%Y-%m-%d %H:%M:%S.%f')
-                tss_node.add(f"Timestamp: {roc_bank.sib.timestamp} ({timestamp_str})")
-
-                # Add Aggregation Info Segment
-                ais_node = sib_node.add(f"Aggregation Info Segment (0x41)")
-                ais_node.add(f"Payload Count: {len(roc_bank.sib.payload_infos)}")
-
-                # Add info for each payload info
-                if depth > 2:
-                    for i, payload_info in enumerate(roc_bank.sib.payload_infos):
-                        if i < preview or i >= len(roc_bank.sib.payload_infos) - 1:
-                            pi_node = ais_node.add(f"Payload Info {i}")
-                            pi_node.add(f"Module ID: {payload_info['module_id']}")
-                            pi_node.add(f"Bond: {payload_info['bond']}")
-                            pi_node.add(f"Lane ID: {payload_info['lane_id']}")
-                            pi_node.add(f"Port Number: {payload_info['port_num']}")
-                        elif i == preview and len(roc_bank.sib.payload_infos) > preview * 2:
-                            ais_node.add(f"... ({len(roc_bank.sib.payload_infos) - preview * 2} more) ...")
-
-                # Add payload banks
-                payload_node = tree.add(f"[bold]Payload Banks ({len(roc_bank.payload_banks)})[/bold]")
-
-                # Add info for each payload bank
-                if depth > 1:
-                    for i, payload_bank in enumerate(roc_bank.payload_banks):
-                        if i < preview or i >= len(roc_bank.payload_banks) - 1:
-                            pb_node = payload_node.add(f"Payload Bank {i}")
-                            pb_node.add(f"Length: {payload_bank.length} words ({payload_bank.data_length} bytes)")
-                            pb_node.add(f"Tag: 0x{payload_bank.tag:04X}")
-
-                            # Add data analysis if available
-                            if hasattr(payload_bank, 'num_samples'):
-                                data_node = pb_node.add(f"Data: {payload_bank.num_samples} samples")
-
-                                if hasattr(payload_bank, 'channels') and hasattr(payload_bank, 'samples_per_channel'):
-                                    data_node.add(f"Structure: {payload_bank.channels} channels × {payload_bank.samples_per_channel} samples/channel")
-
-                                # Add data preview if depth allows
-                                if depth > 3:
-                                    data = payload_bank.get_waveform_data()
-                                    if data:
-                                        preview_count = min(preview, len(data))
-                                        preview_start = ", ".join([f"0x{x:04X}" for x in data[:preview_count]])
-
-                                        if len(data) <= preview_count * 2:
-                                            # Show all data if it's small enough
-                                            data_node.add(f"Values: [{preview_start}]")
-                                        else:
-                                            preview_end = ", ".join([f"0x{x:04X}" for x in data[-preview_count:]])
-                                            data_node.add(f"Values: [{preview_start}, ... {preview_end}]")
-
-                                            # Add statistics
-                                            data_min = min(data)
-                                            data_max = max(data)
-                                            data_mean = sum(data) / len(data)
-                                            data_node.add(f"Statistics: Min={data_min}, Max={data_max}, Mean={data_mean:.2f}")
-                        elif i == preview and len(roc_bank.payload_banks) > preview * 2:
-                            payload_node.add(f"... ({len(roc_bank.payload_banks) - preview * 2} more payload banks) ...")
-
-                console.print(tree)
-
-                # If hexdump requested, show event data
+                # Show hexdump of event if requested
                 if hexdump:
-                    console.print()
-                    console.print(f"[bold]Event #{event_idx} Hexdump (First 256 bytes):[/bold]")
-                    display_len = min(256, evt_length)
-                    event_data = evio_file.mm[evt_offset:evt_offset + display_len]
-                    console.print(make_hex_dump(event_data, title=f"Event #{event_idx} Data"))
+                    print_offset_hex(evio_file.mm, event_obj.offset, min(16, event_obj.length//4),
+                                     f"Event #{event_idx} at 0x{event_obj.offset:X}[{event_obj.offset//4}]")
+
+                # Get the bank
+                try:
+                    bank = event_obj.get_bank()
+
+                    # Handle based on bank type
+                    if isinstance(bank, RocTimeSliceBank):
+                        # Display ROC Time Slice Bank with specialized handling
+                        console.print(f"[bold]ROC Time Slice Bank [ROC ID: {bank.roc_id}][/bold]")
+                        console.print(f"Timestamp: {bank.get_formatted_timestamp()}")
+                        console.print(f"Frame Number: {bank.sib.frame_number}")
+                        console.print(f"Payload Banks: {len(bank.payload_banks)}")
+
+                        # Show more detailed info if verbose
+                        if verbose:
+                            # Display Stream Info Bank
+                            console.print("\n[bold]Stream Info Bank:[/bold]")
+                            display_bank_structure(console, bank.sib, 1, depth, preview, hexdump, evio_file)
+
+                            # Display payload banks
+                            for i, payload in enumerate(bank.payload_banks[:min(preview, len(bank.payload_banks))]):
+                                console.print(f"\n[bold]Payload Bank #{i}:[/bold]")
+                                display_bank_structure(console, payload, 1, depth, preview, hexdump, evio_file)
+
+                            if len(bank.payload_banks) > preview:
+                                console.print(f"[dim]... {len(bank.payload_banks) - preview} more payload banks ...[/dim]")
+                    else:
+                        # Display generic bank structure
+                        display_bank_structure(console, bank, 0, depth, preview, hexdump, evio_file)
+
+                except Exception as e:
+                    console.print(f"[red]Error parsing bank: {str(e)}[/red]")
+                    if verbose:
+                        import traceback
+                        console.print(f"[dim]{traceback.format_exc()}[/dim]")
 
             except Exception as e:
-                console.print(f"[red]Error parsing event as ROC Time Slice Bank: {str(e)}[/red]")
+                console.print(f"[red]Error processing event {event_idx}: {str(e)}[/red]")
 
-                # Try to display bank header info for debugging
-                try:
-                    # Read first two words to try to identify bank type
-                    if evt_offset + 8 <= data_end:
-                        first_word = struct.unpack(evio_file.header.endian + 'I',
-                                                   evio_file.mm[evt_offset:evt_offset+4])[0]
-                        second_word = struct.unpack(evio_file.header.endian + 'I',
-                                                    evio_file.mm[evt_offset+4:evt_offset+8])[0]
-
-                        bank_length = first_word
-                        tag = (second_word >> 16) & 0xFFFF
-                        data_type = (second_word >> 8) & 0xFF
-                        num = second_word & 0xFF
-
-                        console.print(f"Bank Header: Length={bank_length}, Tag=0x{tag:04X}, Type=0x{data_type:02X}, Num={num}")
-                except Exception:
-                    pass
-
-                # Show hexdump for debugging
-                if hexdump or verbose:
-                    console.print()
-                    console.print(f"[bold]Event #{event_idx} Hexdump (First 64 bytes - error case):[/bold]")
-                    display_len = min(64, evt_length)
-                    event_data = evio_file.mm[evt_offset:evt_offset + display_len]
-                    console.print(make_hex_dump(event_data, title=f"Event #{event_idx} Data (Error)"))
+        # Show summary if multiple events processed
+        if len(events_to_dump) > 1:
+            console.print(f"\n[bold]Processed {len(events_to_dump)} of {record_obj.event_count} events in record {record}[/bold]")

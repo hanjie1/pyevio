@@ -147,28 +147,72 @@ class Bank(BankHeader):
         Returns:
             List of Bank objects
         """
+        # Return empty list for non-container banks
         if not self.is_container():
             return []
 
-        if self._children is None:
-            self._children = []
+        # Return cached children if already parsed
+        if self._children is not None:
+            return self._children
 
-            # Parse child banks
-            current_offset = self.data_offset
+        # Initialize empty children list
+        self._children = []
 
-            while current_offset < self.end_offset:
+        # Start from the beginning of the data section
+        current_offset = self.data_offset
+        end_offset = self.end_offset
+
+        while current_offset < end_offset:
+            # We need at least 4 bytes to read a length
+            if current_offset + 4 > end_offset:
+                break
+
+            try:
+                # Read bank length
+                bank_length = struct.unpack(self.endian + 'I',
+                                            self.mm[current_offset:current_offset+4])[0]
+
+                # Basic sanity check: bank shouldn't exceed parent boundary
+                if current_offset + (bank_length * 4) > end_offset:
+                    # If we're near the end (just a word or two left), this might be data padding
+                    # Skip to the next word and continue
+                    current_offset += 4
+                    continue
+
+                # Even a length of 1 is valid for data banks (just the length word itself)
+                # In this case the bank has no additional data beyond the length word
+
+                # Check if we have enough space for this bank
+                if bank_length == 0:
+                    # Zero-length banks are invalid - skip this word
+                    current_offset += 4
+                    continue
+
+                if current_offset + (bank_length * 4) > end_offset:
+                    # Bank goes beyond parent boundary - skip this word
+                    current_offset += 4
+                    continue
+
+                # Try to create bank object
                 try:
-                    # Create child bank
                     child = Bank.from_buffer(self.mm, current_offset, self.endian)
+
+                    # Add to children
                     self._children.append(child)
 
-                    # Move to next bank
-                    current_offset += child.size
+                    # Move to next bank by adding this bank's length
+                    current_offset += bank_length * 4
+
                 except Exception as e:
-                    # If we encounter an error, stop parsing
-                    if self._children:
-                        break
-                    raise
+                    # Error creating bank - skip ahead
+                    if self._children and hasattr(self, 'verbose') and self.verbose:
+                        print(f"Error parsing bank at 0x{current_offset:X}: {str(e)}")
+                    current_offset += 4
+                    continue
+
+            except Exception as e:
+                # Error reading/processing data - skip ahead
+                current_offset += 4
 
         return self._children
 

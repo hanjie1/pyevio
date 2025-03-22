@@ -12,90 +12,330 @@ from pyevio.core import EvioFile
 from pyevio.roc_time_slice_bank import RocTimeSliceBank
 from pyevio.utils import make_hex_dump, print_offset_hex
 
-def decode_bank_structure(mm, offset, endian, depth=0, max_depth=10):
-    """
-    Recursively decode and display EVIO bank structure.
+import click
+from rich.console import Console
+from rich.panel import Panel
+from rich.syntax import Syntax
+from rich import box
+from rich.table import Table
+from rich.tree import Tree
+import struct
+from datetime import datetime
 
-    Args:
-        mm: Memory-mapped file
-        offset: Starting byte offset
-        endian: Endianness ('<' or '>')
-        depth: Current depth level (for indentation)
-        max_depth: Maximum recursion depth
+from pyevio.core import EvioFile
+from pyevio.bank import Bank
+from pyevio.roc_time_slice_bank import RocTimeSliceBank
+from pyevio.utils import make_hex_dump, print_offset_hex
 
-    Returns:
-        Tuple of (next_offset, formatted_output)
-    """
-    if depth > max_depth:
-        return offset, ["  " * depth + "[Maximum depth reached]"]
 
-    output = []
+def display_record_info(console, record_obj, record_index):
+    """Display record header information."""
+    console.print(f"[bold cyan]Record #{record_index} Analysis[/bold cyan]")
+    console.print(f"[bold]Offset: [green]0x{record_obj.offset:X}[{record_obj.offset//4}][/green], Length: [green]{record_obj.header.record_length}[/green] words[/bold]")
+    console.print(f"[bold]Type: [green]{record_obj.header.event_type}[/green], Events: [green]{record_obj.event_count}[/green][/bold]")
+
+
+def display_bank_header(console, bank, title=None):
+    """Display basic information about a bank."""
+    bank_title = title or "Bank Information"
+    console.print(f"[bold]{bank_title}:[/bold]")
+    console.print(f"Tag: 0x{bank.tag:04X}, Data Type: 0x{bank.data_type:02X}, Offset: 0x{bank.offset:X}[{bank.offset//4}]")
+    console.print(f"Length: {bank.length} words ({bank.data_length} bytes of data)")
+
+
+def get_bank_type_name(bank):
+    """Determine a human-readable bank type name."""
+    bank_type = "Unknown"
+    if bank.data_type == 0x10:
+        bank_type = "Bank of banks"
+    elif bank.data_type == 0x20:
+        bank_type = "Segment"
+    elif (bank.tag & 0xFF00) == 0xFF00:
+        tag_type = bank.tag & 0x00FF
+        if (tag_type & 0x10) == 0x10:
+            bank_type = "ROC Raw Data Record"
+        elif tag_type == 0x30:
+            bank_type = "Stream Info Bank"
+        elif tag_type == 0x31:
+            bank_type = "Time Slice Segment"
+        elif tag_type == 0x41 or tag_type == 0x85:
+            bank_type = "Aggregation Info Segment"
+    return bank_type
+
+
+def display_child_banks(console, parent_bank, evio_file, verbose, hexdump, level=0, max_level=2):
+    """Recursively display information about child banks."""
+    if not parent_bank.is_container() or level > max_level:
+        return
 
     try:
-        # Read bank length
-        length = struct.unpack(f"{endian}I", mm[offset:offset+4])[0]
+        children = parent_bank.get_children()
+        if not children:
+            console.print(f"[bold]No child banks found[/bold]")
+            return
 
-        # Read bank header
-        header_word = struct.unpack(f"{endian}I", mm[offset+4:offset+8])[0]
-        tag = (header_word >> 16) & 0xFFFF
-        data_type = (header_word >> 8) & 0xFF
-        num = header_word & 0xFF
+        console.print(f"[bold]Contains {len(children)} child banks:[/bold]")
 
-        # Determine bank type
-        bank_type = "Unknown"
-        if data_type == 0x10:
-            bank_type = "Bank of banks"
-        elif data_type == 0x20:
-            bank_type = "Segment"
-        elif (tag & 0xFF00) == 0xFF00:
-            tag_type = tag & 0x00FF
-            if tag_type == 0x30:
-                bank_type = "Stream Info Bank"
-            elif tag_type == 0x31:
-                bank_type = "Time Slice Segment"
-            elif tag_type == 0x41 or tag_type == 0x85:
-                bank_type = "Aggregation Info Segment"
+        # Create a table for child banks
+        child_table = Table(box=box.SIMPLE)
+        child_table.add_column("#", style="cyan")
+        child_table.add_column("Offset", style="green")
+        child_table.add_column("Tag", style="yellow")
+        child_table.add_column("Data Type", style="magenta")
+        child_table.add_column("Length", style="blue")
+        child_table.add_column("Type", style="white")
 
-        # Format bank header information
-        header_info = f"0x{offset:08X}: Bank [Length: {length}, Tag: 0x{tag:04X}, Type: 0x{data_type:02X}, Num: 0x{num:02X}] - {bank_type}"
-        output.append("  " * depth + header_info)
+        for i, child in enumerate(children[:min(20, len(children))]):
+            try:
+                bank_type = get_bank_type_name(child)
 
-        # Calculate data offset
-        data_offset = offset + 8  # After bank header
+                child_table.add_row(
+                    str(i),
+                    f"0x{child.offset:X}[{child.offset//4}]",
+                    f"0x{child.tag:04X}",
+                    f"0x{child.data_type:02X}",
+                    f"{child.length} words",
+                    bank_type
+                )
+            except Exception as e:
+                child_table.add_row(
+                    str(i),
+                    f"0x{child.offset:X}[{child.offset//4}]",
+                    "ERROR",
+                    "ERROR",
+                    f"Parse Error: {str(e)}",
+                    "Invalid Bank"
+                )
 
-        # For container banks, recursively process children
-        if data_type == 0x10 or data_type == 0x20 or data_type == 0xE or data_type == 0xD:
-            child_offset = data_offset
-            end_offset = offset + (length * 4)
+        if len(children) > 20:
+            child_table.add_row("...", "...", "...", "...", f"{len(children) - 20} more banks", "...")
 
-            while child_offset < end_offset:
-                next_offset, child_output = decode_bank_structure(mm, child_offset, endian, depth + 1, max_depth)
-                output.extend(child_output)
-                child_offset = next_offset
+        console.print(child_table)
+
+        # Display detailed info for each child if requested
+        if verbose or hexdump:
+            for i, child in enumerate(children[:min(10, len(children))]):
+                try:
+                    console.print(f"\n[bold]Child Bank #{i} (Tag 0x{child.tag:04X}, Type 0x{child.data_type:02X}):[/bold]")
+
+                    # Use print_offset_hex for displaying hex data
+                    if hexdump:
+                        print_offset_hex(evio_file.mm, child.offset, min(16, child.length),
+                                         f"Child #{i} at offset 0x{child.offset:X}[{child.offset//4}]")
+
+                    # Show length details for better debugging
+                    console.print(f"[dim]Length: {child.length} words, Data Length: {child.data_length} bytes[/dim]")
+                    console.print(f"[dim]Offset Range: 0x{child.offset:X} - 0x{child.offset + (child.length * 4):X}[/dim]")
+
+                    # Check if this is a data bank (length 1 or 2)
+                    if child.length <= 2 and not child.is_container():
+                        # This is likely a data bank
+                        display_data_bank(console, child, evio_file, hexdump)
+                    # Recurse for container banks
+                    elif child.is_container() and level < max_level:
+                        display_child_banks(console, child, evio_file, verbose, hexdump, level + 1, max_level)
+                except Exception as e:
+                    console.print(f"[red]Error analyzing child {i}: {str(e)}[/red]")
+                    if verbose:
+                        import traceback
+                        console.print(f"[dim]{traceback.format_exc()}[/dim]")
+    except Exception as e:
+        console.print(f"[red]Error accessing child banks: {str(e)}[/red]")
+
+def display_data_bank(console, bank, evio_file, hexdump=False):
+    """
+    Display detailed information about a data bank, including bit-field analysis.
+
+    Args:
+        console: Rich console for output
+        bank: Bank object representing a data bank
+        evio_file: EvioFile object for accessing raw data
+        hexdump: Whether to show hex dumps
+    """
+    # Get data value
+    if bank.length == 1:
+        # For a length-1 bank, there's no additional data - the bank is just the length word
+        console.print(f"[bold]Data Bank (Length 1, No Data)[/bold]")
+        return
+
+    # Get all data words from the bank
+    data_words = []
+    for i in range(bank.data_offset, bank.data_offset + bank.data_length, 4):
+        if i + 4 <= bank.offset + bank.size:
+            word = struct.unpack(bank.endian + 'I', evio_file.mm[i:i+4])[0]
+            data_words.append(word)
+
+    if not data_words:
+        console.print(f"[bold]Data Bank (No Valid Data)[/bold]")
+        return
+
+    # Display data information
+    console.print(f"[bold]Data Bank (Data Words: {len(data_words)})[/bold]")
+
+    # Display raw values
+    for i, word in enumerate(data_words):
+        console.print(f"  Word {i}: 0x{word:08X}")
+
+        # Try to interpret FADC hit data
+        chan = (word >> 13) & 0x000F
+        charge = word & 0x1FFF
+        time = ((word >> 17) & 0x3FFF) * 4
+
+        # Display decoded fields
+        console.print(f"    [dim]Channel: {chan}, Charge: {charge}, Time: {time}[/dim]")
+
+    # Show hexdump if requested
+    if hexdump and bank.data_length > 0:
+        print_offset_hex(evio_file.mm, bank.data_offset, min(bank.data_length // 4, 16),
+                         f"Data Bank at 0x{bank.offset:X}[{bank.offset//4}]")
+
+def display_roc_timeslice_info(console, bank, evio_file, payload_filter=None, hexdump=False):
+    """Display detailed information about a ROC Time Slice Bank."""
+    console.print(f"[bold]ROC Time Slice Bank (ROC ID: {bank.roc_id})[/bold]")
+
+    # Show timestamp information
+    console.print(f"Timestamp: {bank.get_formatted_timestamp()}")
+    console.print(f"Frame Number: {bank.sib.frame_number}")
+
+    # Display Stream Info Bank details
+    console.print(f"\n[bold]Stream Info Bank (0xFF30):[/bold]")
+    console.print(f"Error Flag: {bank.error_flag}, Total Streams: {bank.total_streams}, Stream Mask: 0x{bank.stream_mask:X}")
+
+    # Display payload info
+    console.print(f"\n[bold]Payload Information ({len(bank.sib.payload_infos)} entries):[/bold]")
+
+    payload_table = Table(box=box.SIMPLE)
+    payload_table.add_column("#", style="cyan")
+    payload_table.add_column("Module ID", style="green")
+    payload_table.add_column("Bond", style="yellow")
+    payload_table.add_column("Lane ID", style="magenta")
+    payload_table.add_column("Port #", style="blue")
+
+    for i, payload_info in enumerate(bank.sib.payload_infos):
+        payload_table.add_row(
+            str(i),
+            str(payload_info['module_id']),
+            str(payload_info['bond']),
+            str(payload_info['lane_id']),
+            str(payload_info['port_num'])
+        )
+
+    console.print(payload_table)
+
+    # Display payload banks
+    console.print(f"\n[bold]Payload Banks ({len(bank.payload_banks)}):[/bold]")
+
+    # Filter payloads if requested
+    payload_indices = range(len(bank.payload_banks))
+    if payload_filter is not None:
+        if payload_filter < 0 or payload_filter >= len(bank.payload_banks):
+            console.print(f"[yellow]Warning: Payload {payload_filter} out of range (0-{len(bank.payload_banks)-1})[/yellow]")
         else:
-            # For leaf banks, show data preview
-            data_size = (length - 1) * 4  # Length includes header word
-            data_preview = mm[data_offset:data_offset+min(16, data_size)]
-            hex_preview = " ".join([f"{b:02X}" for b in data_preview])
-            if data_size > 16:
-                hex_preview += " ..."
-            output.append("  " * (depth + 1) + f"Data: [{hex_preview}] ({data_size} bytes)")
+            payload_indices = [payload_filter]
 
-        # Return next offset and output
-        return offset + (length * 4), output
+    # Display each payload bank
+    for p_idx in payload_indices:
+        if p_idx >= len(bank.payload_banks):
+            continue
+
+        payload_bank = bank.payload_banks[p_idx]
+        payload_info = bank.sib.payload_infos[p_idx] if p_idx < len(bank.sib.payload_infos) else None
+
+        console.print(f"\n[bold]Payload {p_idx}:[/bold]")
+        console.print(f"Offset: 0x{payload_bank.offset:X}[{payload_bank.offset//4}], Length: {payload_bank.length} words")
+        console.print(f"Tag: 0x{payload_bank.tag:04X}, Data Type: 0x{payload_bank.data_type:02X}")
+
+        if payload_info:
+            console.print(f"Module ID: {payload_info['module_id']}, Lane ID: {payload_info['lane_id']}, Port: {payload_info['port_num']}")
+
+        # Show waveform information if available
+        if hasattr(payload_bank, 'num_samples'):
+            console.print(f"Total Samples: {payload_bank.num_samples}")
+            if hasattr(payload_bank, 'channels'):
+                console.print(f"Channels: {payload_bank.channels}")
+            if hasattr(payload_bank, 'samples_per_channel'):
+                console.print(f"Samples/Channel: {payload_bank.samples_per_channel}")
+
+            # Show data preview
+            try:
+                data = payload_bank.get_waveform_data()
+                if data:
+                    console.print(f"Data Range: Min={min(data)}, Max={max(data)}, Mean={(sum(data)/len(data)):.2f}")
+
+                    # Show hexdump of waveform data
+                    if hexdump:
+                        print_offset_hex(evio_file.mm, payload_bank.data_offset, min(16, payload_bank.data_length//4),
+                                         f"Payload {p_idx} Data at 0x{payload_bank.data_offset:X}[{payload_bank.data_offset//4}]")
+            except Exception as e:
+                console.print(f"[red]Error analyzing waveform data: {str(e)}[/red]")
+
+
+def display_event_info(console, evio_file, record_obj, event_idx, payload_filter, hexdump, verbose):
+    """Display detailed information about an event."""
+    console.print(f"[bold yellow]Event #{event_idx}[/bold yellow]")
+
+    try:
+        event_obj = record_obj.get_event(event_idx)
+        console.print(f"[bold]Offset: [green]0x{event_obj.offset:X}[{event_obj.offset//4}][/green], Size: [green]{event_obj.length}[/green] bytes[/bold]")
+
+        # Show hexdump if requested
+        if hexdump:
+            console.print()
+            print_offset_hex(evio_file.mm, event_obj.offset, min(30, event_obj.length//4), f"Event #{event_idx} at 0x{event_obj.offset:X}[{event_obj.offset//4}]")
+
+
+        # Get bank information
+        bank_info = event_obj.get_bank_info()
+        if bank_info:
+            console.print(f"[bold]Bank Type: {bank_info.get('bank_type', 'Unknown')} (Tag: 0x{bank_info.get('tag', 0):04X})[/bold]")
+
+
+        # Try to parse the event as a bank
+        try:
+            # Get the bank object
+            bank = event_obj.get_bank()
+
+            # Show basic bank information
+            display_bank_header(console, bank)
+
+            # Handle different bank types
+            if isinstance(bank, RocTimeSliceBank):
+                # Display ROC Time Slice Bank information
+                display_roc_timeslice_info(console, bank, evio_file, payload_filter, hexdump)
+            elif bank.is_container():
+                # Display child banks for container banks
+                display_child_banks(console, bank, evio_file, verbose, hexdump)
+            else:
+                # For leaf banks, show data preview
+                data = bank.to_numpy()
+                if data is not None:
+                    preview = ", ".join([f"{x}" for x in data[:min(5, len(data))]])
+                    if len(data) > 5:
+                        preview += f", ... ({len(data)} elements)"
+                    console.print(f"[bold]Data Preview:[/bold] {preview}")
+
+                # Show hexdump of bank data if requested
+                if hexdump:
+                    print_offset_hex(evio_file.mm, bank.data_offset, min(16, bank.data_length//4),
+                                     f"Bank Data at 0x{bank.data_offset:X}[{bank.data_offset//4}]")
+
+        except Exception as e:
+            console.print(f"[red]Error parsing bank: {str(e)}[/red]")
+            if verbose:
+                import traceback
+                console.print(f"[dim]{traceback.format_exc()}[/dim]")
 
     except Exception as e:
-        output.append("  " * depth + f"[Error decoding bank at 0x{offset:08X}: {str(e)}]")
-        return offset + 4, output
+        console.print(f"[red]Error accessing event: {str(e)}[/red]")
 
 
 @click.command(name="debug")
 @click.argument("filename", type=click.Path(exists=True))
 @click.option("--record", "-r", "record_index", type=int, required=True, help="Record number to debug")
-@click.option("--event", "-e", type=int, help="Event number within the record (if omitted, scans all events)")
+@click.option("--event", "-e", type=int, help="Event number within the record (if omitted, scans first few events)")
 @click.option("--payload", "-p", type=int, help="Payload number to focus on (if omitted, shows all payloads)")
 @click.option("--hexdump/--no-hexdump", default=False, help="Show hex dump of data structures")
-@click.option("--verbose", "-v", is_flag=True, help="Enable verbose output")
+@click.option('--verbose', '-v', is_flag=True, help="Enable verbose output")
 @click.pass_context
 def debug_command(ctx, filename, record_index, event, payload, hexdump, verbose):
     """
@@ -109,186 +349,32 @@ def debug_command(ctx, filename, record_index, event, payload, hexdump, verbose)
     console = Console()
 
     with EvioFile(filename, verbose) as evio_file:
-        if record_index < 0 or record_index >= len(evio_file.record_offsets):
-            raise click.BadParameter(f"Record {record_index} out of range (0-{len(evio_file.record_offsets) - 1})")
+        # Validate record index
+        if record_index < 0 or record_index >= evio_file.record_count:
+            raise click.BadParameter(f"Record {record_index} out of range (0-{evio_file.record_count-1})")
 
-        record_offset = evio_file.record_offsets[record_index]
-        record_header = evio_file.scan_record(evio_file.mm, record_offset)
+        # Get the record object
+        record_obj = evio_file.get_record(record_index)
 
         # Display record header information
-        console.print(f"[bold cyan]Record #{record_index} Analysis[/bold cyan]")
-        console.print(f"[bold]Offset: [green]0x{record_offset:X}[/green], Length: [green]{record_header.record_length}[/green] words[/bold]")
-        console.print(f"[bold]Type: [green]{record_header.event_type}[/green], Events: [green]{record_header.event_count}[/green][/bold]")
+        display_record_info(console, record_obj, record_index)
 
-        # If hexdump requested, show record header hexdump
+        # Show hexdump of record header if requested
         if hexdump:
             console.print()
-            print_offset_hex(evio_file.mm, record_offset, record_header.header_length, "Record Header:")
+            print_offset_hex(evio_file.mm, record_obj.offset, record_obj.header.header_length, "Record Header")
 
-        # Calculate record data range (start after record header + index array + user header)
-        data_start = record_offset + record_header.header_length * 4
-        index_start = data_start
-        index_end = index_start + record_header.index_array_length
-        data_start = index_end + record_header.user_header_length
-        data_end = record_offset + record_header.record_length * 4
-
-        # Parse event index array to get event offsets
-        event_offsets = []
-        if record_header.index_array_length > 0:
-            console.print()
-            console.print("[bold]Event Index Array:[/bold]")
-
-            index_table = Table(title="Event Lengths", box=box.SIMPLE)
-            index_table.add_column("Event #", style="cyan")
-            index_table.add_column("Length (bytes)", style="green")
-
-            # Read event lengths from index array (32-bit ints)
-            event_count = record_header.index_array_length // 4
-
-            # Calculate cumulative offset for each event
-            current_offset = data_start
-
-            for i in range(event_count):
-                length_offset = index_start + (i * 4)
-                event_length = struct.unpack(evio_file.header.endian + 'I',
-                                             evio_file.mm[length_offset:length_offset+4])[0]
-
-                # Store event offset
-                event_offsets.append(current_offset)
-
-                # Update cumulative offset
-                current_offset += event_length
-
-                # Add to table (only display at most 20 events to avoid overloading output)
-                if i < 10 or i >= event_count - 5 or event_count <= 20:
-                    index_table.add_row(str(i), f"{event_length}")
-                elif i == 10 and event_count > 20:
-                    index_table.add_row("...", "...")
-
-            console.print(index_table)
-        else:
-            print("Index array len: 0")
-
-        # Handle event parameter - scan specific event or all events
+        # Handle event parameter
         events_to_scan = []
         if event is not None:
-            if event < 0 or event >= len(event_offsets):
-                raise click.BadParameter(f"Event {event} out of range (0-{len(event_offsets)-1})")
+            if event < 0 or event >= record_obj.event_count:
+                raise click.BadParameter(f"Event {event} out of range (0-{record_obj.event_count-1})")
             events_to_scan = [event]
         else:
-            # Limit to first 5 events by default if not specified
-            events_to_scan = list(range(min(5, len(event_offsets))))
+            # Limit to first few events by default if not specified
+            events_to_scan = list(range(min(3, record_obj.event_count)))
 
         # Scan each event
         for evt_idx in events_to_scan:
             console.print()
-            console.print(f"[bold yellow]Event #{evt_idx}[/bold yellow]")
-
-            if evt_idx >= len(event_offsets):
-                console.print("[red]Event index out of range[/red]")
-                continue
-
-            evt_offset = event_offsets[evt_idx]
-
-            # Calculate event end
-            evt_end = data_end
-            if evt_idx < len(event_offsets) - 1:
-                evt_end = event_offsets[evt_idx + 1]
-
-            console.print(f"[bold]Offset: [green]0x{evt_offset:X}[{evt_offset//4}][/green], Size: [green]{evt_end - evt_offset}[/green] bytes[/bold]")
-
-            # Display structured bank decoding
-            console.print("\n[bold]Event Bank Structure:[/bold]")
-            _, bank_structure = decode_bank_structure(evio_file.mm, evt_offset, evio_file.header.endian)
-            for line in bank_structure:
-                console.print(line)
-
-            print_offset_hex(evio_file.mm, evt_offset, evt_length_bytes//4, "Event content HEX:")
-
-            # Try to parse the event as a ROC Time Slice Bank
-            try:
-                roc_bank = RocTimeSliceBank(evio_file.mm, evt_offset, evio_file.header.endian)
-
-                # Show bank information
-                tree = Tree(f"[bold]ROC Time Slice Bank (ROC ID: {roc_bank.roc_id})[/bold]")
-
-                # Add Stream Info Bank to tree
-                sib_node = tree.add(f"[bold]Stream Info Bank (0xFF30)[/bold]")
-
-                # Add Time Slice Segment info
-                tss_node = sib_node.add(f"[bold]Time Slice Segment (0x31)[/bold]")
-                tss_node.add(f"Frame Number: {roc_bank.sib.frame_number}")
-
-                # Format timestamp for display
-                timestamp_seconds = roc_bank.sib.timestamp / 1e9  # Convert to seconds (assuming nanoseconds)
-                timestamp_str = datetime.fromtimestamp(timestamp_seconds).strftime('%Y-%m-%d %H:%M:%S.%f')
-                tss_node.add(f"Timestamp: {roc_bank.sib.timestamp} ({timestamp_str})")
-
-                # Add Aggregation Info Segment
-                ais_node = sib_node.add(f"[bold]Aggregation Info Segment (0x41)[/bold]")
-                ais_node.add(f"Payload Count: {len(roc_bank.sib.payload_infos)}")
-
-                # Add info for each payload
-                payload_count = len(roc_bank.payload_banks)
-                payloads_node = tree.add(f"[bold]Payload Banks ({payload_count})[/bold]")
-
-                # Filter payloads based on --payload option
-                payload_indices = range(payload_count)
-                if payload is not None:
-                    if payload < 0 or payload >= payload_count:
-                        console.print(f"[yellow]Warning: Payload {payload} out of range (0-{payload_count-1})[/yellow]")
-                    else:
-                        payload_indices = [payload]
-
-                for p_idx in payload_indices:
-                    if p_idx >= payload_count:
-                        continue
-
-                    payload_bank = roc_bank.payload_banks[p_idx]
-                    payload_info = roc_bank.sib.payload_infos[p_idx] if p_idx < len(roc_bank.sib.payload_infos) else None
-
-                    # Get payload details
-                    if payload_info:
-                        p_node = payloads_node.add(f"[bold]Payload {p_idx} (Module: {payload_info['module_id']}, Lane: {payload_info['lane_id']}, Port: {payload_info['port_num']})[/bold]")
-                    else:
-                        p_node = payloads_node.add(f"[bold]Payload {p_idx}[/bold]")
-
-                    p_node.add(f"Length: {payload_bank.length} words ({payload_bank.data_length} bytes of data)")
-                    p_node.add(f"Tag: 0x{payload_bank.tag:04X}")
-
-                    # Show data analysis
-                    if hasattr(payload_bank, 'num_samples'):
-                        p_node.add(f"Total Samples: {payload_bank.num_samples}")
-                        if hasattr(payload_bank, 'channels'):
-                            p_node.add(f"Channels: {payload_bank.channels}")
-                        if hasattr(payload_bank, 'samples_per_channel'):
-                            p_node.add(f"Samples/Channel: {payload_bank.samples_per_channel}")
-
-                        # Add a preview of the data
-                        data = payload_bank.get_waveform_data()
-                        if data:
-                            preview_count = min(8, len(data))
-                            preview_start = ", ".join([f"0x{x:04X}" for x in data[:preview_count]])
-                            preview_end = ", ".join([f"0x{x:04X}" for x in data[-preview_count:]])
-
-                            if len(data) <= preview_count * 2:
-                                # Show all data if it's small enough
-                                p_node.add(f"Data: [{preview_start}]")
-                            else:
-                                p_node.add(f"Data Preview: [{preview_start}, ... {preview_end}]")
-
-                console.print(tree)
-
-                # If hexdump requested, show event hexdump
-                if hexdump:
-                    console.print()
-                    console.print(f"[bold]Event Hexdump (First 256 bytes):[/bold]")
-                    event_data = evio_file.mm[evt_offset:min(evt_offset + 256, evt_end)]
-                    console.print(make_hex_dump(event_data, title=f"Event #{evt_idx} Data"))
-
-            except Exception as e:
-                console.print(f"[red]Error parsing event as ROC Time Slice Bank: {str(e)}[/red]")
-                if hexdump:
-                    # Show partial dump to help debug
-                    event_data = evio_file.mm[evt_offset:min(evt_offset + 64, evt_end)]
-                    console.print(make_hex_dump(event_data, title=f"Event #{evt_idx} Data (Error)"))
+            display_event_info(console, evio_file, record_obj, evt_idx, payload, hexdump, verbose)
