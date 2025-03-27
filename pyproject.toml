@@ -11,15 +11,14 @@ dependencies = [
     "lz4>=4.4.0",
     "rich",
     "numpy",
-    "matplotlib"
-
+    "matplotlib",
+    "textual"
 ]
 
 
 [project.optional-dependencies]
-test = [
-    "pytest"
-]
+test = ["pytest"]
+
 
 
 [build-system]

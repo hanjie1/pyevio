@@ -8,6 +8,7 @@ from pyevio.cli.debug import debug_command
 from pyevio.cli.record import record_command
 from pyevio.cli.event import event_command
 from pyevio.cli.hex import hex_command
+from pyevio.cli.ui import ui_command
 
 
 @click.group()
@@ -21,6 +22,22 @@ def cli(ctx, verbose):
     ctx.obj['VERBOSE'] = verbose
 
 
+@cli.command(name="ui")
+@click.argument("filename", type=click.Path(exists=True))
+@click.option('--verbose', '-v', is_flag=True, help="Enable verbose output")
+@click.pass_context
+def ui_command(ctx, filename, verbose):
+    """Launch the textual UI for EVIO file inspection."""
+    try:
+        from pyevio.ui.app import PyEvioApp
+    except ImportError:
+        print("Error: The textual library is required for the UI.")
+        print("Please install it with: pip install textual>=0.30.0")
+        return
+
+    app = PyEvioApp(filename)
+    app.run()
+
 # Register commands with the CLI
 cli.add_command(info_command)
 cli.add_command(dump_command)
@@ -28,6 +45,7 @@ cli.add_command(debug_command)
 cli.add_command(record_command)
 cli.add_command(event_command)
 cli.add_command(hex_command)
+cli.add_command(ui_command)
 
 
 # Entry point for the CLI
