@@ -44,7 +44,7 @@ def debug_memory_dump(data, offset, length, title=None):
 
         word_info = ' | '.join(words)
         print(f"{offset+i:04X}: {hex_values:<48} {word_info}")
-        
+
 
 class MockMemoryMap:
     """A mock memory map for testing bank scanning."""
