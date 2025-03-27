@@ -168,7 +168,7 @@ class EvioFile:
 
         return self._total_event_count
 
-    def get_event(self, global_index: int) -> Tuple[Record, Event]:
+    def get_record_and_event(self, global_index: int) -> Tuple[Record, Event]:
         """
         Get an event by global index across all records.
 
@@ -203,6 +203,18 @@ class EvioFile:
 
         # If we get here, the global_index is out of range
         raise IndexError(f"Global event index {global_index} out of range (0-{current_index-1})")
+
+    def get_event(self, global_index: int) -> Event:
+        """Gets event by the global index, automatically finds record, where it is located
+
+        Description:
+            - Same as `get_record_and_event`, but instead of tuple only returns the event object
+            - If you need to get a bulk of events, this might be not the best performance for this
+
+        Returns: found events
+        """
+        _, event = self.get_record_and_event(global_index)
+        return event
 
     def iter_events(self) -> Iterator[Tuple[Record, Event]]:
         """

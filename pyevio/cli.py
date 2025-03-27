@@ -2,7 +2,7 @@ import click
 from rich.console import Console
 from rich.table import Table
 from rich import box
-from pyevio.core import EvioFile
+from pyevio.evio_file import EvioFile
 from datetime import datetime
 from pyevio.roc_time_slice_bank import RocTimeSliceBank
 from pyevio.utils import make_hex_dump

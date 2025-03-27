@@ -3,7 +3,7 @@ pyevio - A Python library for reading and introspecting EVIO v6 files.
 """
 
 # Export core classes
-from pyevio.core import EvioFile
+from pyevio.evio_file import EvioFile
 from pyevio.file_header import FileHeader
 from pyevio.record_header import RecordHeader
 from pyevio.bank import Bank

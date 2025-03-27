@@ -6,7 +6,7 @@ from rich.tree import Tree
 import struct
 from datetime import datetime
 
-from pyevio.core import EvioFile
+from pyevio.evio_file import EvioFile
 from pyevio.roc_time_slice_bank import RocTimeSliceBank
 from pyevio.utils import make_hex_dump
 

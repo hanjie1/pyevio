@@ -1,4 +1,6 @@
 import os
+import sys
+
 import click
 
 # Import and register commands
@@ -11,7 +13,7 @@ from pyevio.cli.hex import hex_command
 from pyevio.cli.ui import ui_command
 
 
-@click.group()
+@click.group(invoke_without_command=True)
 @click.version_option(version="0.1.0")
 @click.option('--verbose', '-v', is_flag=True, help="Enable verbose output")
 @click.pass_context
@@ -21,22 +23,13 @@ def cli(ctx, verbose):
     ctx.ensure_object(dict)
     ctx.obj['VERBOSE'] = verbose
 
+    # If no command was provided, and there are arguments, check if the first one is a file
+    if ctx.invoked_subcommand is None and len(sys.argv) > 1:
+        potential_file = sys.argv[1]
+        if os.path.isfile(potential_file):
+            # Treat this as 'info' command
+            ctx.invoke(info_command, filename=potential_file, verbose=verbose)
 
-@cli.command(name="ui")
-@click.argument("filename", type=click.Path(exists=True))
-@click.option('--verbose', '-v', is_flag=True, help="Enable verbose output")
-@click.pass_context
-def ui_command(ctx, filename, verbose):
-    """Launch the textual UI for EVIO file inspection."""
-    try:
-        from pyevio.ui.app import PyEvioApp
-    except ImportError:
-        print("Error: The textual library is required for the UI.")
-        print("Please install it with: pip install textual>=0.30.0")
-        return
-
-    app = PyEvioApp(filename)
-    app.run()
 
 # Register commands with the CLI
 cli.add_command(info_command)

@@ -8,7 +8,7 @@ from rich.tree import Tree
 import struct
 from datetime import datetime
 
-from pyevio.core import EvioFile
+from pyevio.evio_file import EvioFile
 from pyevio.roc_time_slice_bank import RocTimeSliceBank
 from pyevio.utils import make_hex_dump, print_offset_hex
 
@@ -22,7 +22,7 @@ from rich.tree import Tree
 import struct
 from datetime import datetime
 
-from pyevio.core import EvioFile
+from pyevio.evio_file import EvioFile
 from pyevio.bank import Bank
 from pyevio.roc_time_slice_bank import RocTimeSliceBank
 from pyevio.utils import make_hex_dump, print_offset_hex
@@ -275,7 +275,7 @@ def display_event_info(console, evio_file, record_obj, event_idx, payload_filter
     console.print(f"[bold yellow]Event #{event_idx}[/bold yellow]")
 
     try:
-        event_obj = record_obj.get_event(event_idx)
+        event_obj = record_obj.get_record_and_event(event_idx)
         console.print(f"[bold]Offset: [green]0x{event_obj.offset:X}[{event_obj.offset//4}][/green], Size: [green]{event_obj.length}[/green] bytes[/bold]")
 
         # Show hexdump if requested

@@ -3,7 +3,7 @@ from email.policy import default
 import click
 from rich.console import Console
 
-from pyevio.core import EvioFile
+from pyevio.evio_file import EvioFile
 from pyevio.utils import print_offset_hex
 
 
