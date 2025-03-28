@@ -231,8 +231,7 @@ class Record:
 
     import numpy as np
 
-    def events_to_numpy(self, signature: int = 0xFF60, start_event: Optional[int] = None,
-                        end_event: Optional[int] = None, dtype=np.uint32) -> np.ndarray:
+    def events_to_numpy(self, signature: int = 0xFF60, start_event: Optional[int] = None, end_event: Optional[int] = None, dtype=np.uint32) -> np.ndarray:
         """
         Convert events with a specific signature to a NumPy array.
 
@@ -250,32 +249,14 @@ class Record:
             NumPy array containing all event data matching the signature
         """
         # Get all events or subset based on start/end parameters
-        events = self.get_events()
+        events = self.get_events(start_event, end_event)
 
         if not events:
             return np.array([], dtype=dtype)
 
-        # Apply start/end filters if provided
-        if start_event is not None:
-            if start_event < 0:
-                start_event = 0
-        else:
-            start_event = 0
-
-        if end_event is not None:
-            if end_event > len(events):
-                end_event = len(events)
-        else:
-            end_event = len(events)
-
-        filtered_events = events[start_event:end_event]
-
-        if not filtered_events:
-            return np.array([], dtype=dtype)
-
         # Extract offsets and lengths for all events
-        offsets = np.array([event.offset for event in filtered_events], dtype=np.int64)
-        lengths = np.array([event.length for event in filtered_events], dtype=np.int64)
+        offsets = np.array([event.offset for event in events], dtype=np.int64)
+        lengths = np.array([event.length for event in events], dtype=np.int64)
 
         # Filter out events that are too small
         valid_indices = lengths >= 8
@@ -287,6 +268,7 @@ class Record:
 
         # Check which events match the signature
         signatures = np.zeros(len(offsets), dtype=np.uint32)
+
         for i in range(len(offsets)):
             # Extract the second word (bytes 4-8)
             second_word = int.from_bytes(

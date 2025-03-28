@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/e    nv python3
 """
 Example script demonstrating direct loading of EVIO events into NumPy arrays
 for efficient processing without the overhead of creating Event objects.
@@ -9,7 +9,59 @@ import time
 import sys
 import os
 from pyevio import EvioFile
+from pyevio.utils import print_offset_hex
 
+
+def direct_events_loading2(filename, start_event=0, end_event=100000, event_size_bytes=88, endian='>'):
+    print(f"Loading events {start_event}-{end_event-1} from {filename}")
+    print(f"Assuming fixed event size of {event_size_bytes} bytes")
+
+    # Calculate event size in 32-bit words
+    event_size_words = event_size_bytes // 4
+    print(f"Event size: {event_size_words} words")
+
+    with EvioFile(filename) as evio_file:
+        # Get first record for demonstration
+        record = evio_file.get_record(2)
+
+        # Get event offsets directly
+        t0 = time.time()
+        event_infos = record.get_event_offsets(start_event, end_event)
+        t1 = time.time()
+        print(f"Got {len(event_infos)} event offsets in {(t1-t0)*1000:.2f} ms")
+
+        prev_delta = event_infos[1][0] - event_infos[0][0]
+        for i in range (1, len(event_infos)):
+            new_delta = event_infos[i][0] - event_infos[i-1][0]
+            if new_delta != prev_delta:
+                print(f"i = {i} New delta {prev_delta} Old delta {new_delta} ioff: {event_infos[i][0]} isize:{event_infos[i][1]}  i-1{event_infos[i-1][0]} {event_infos[i-1][1]}")
+                prev_delta = new_delta
+
+                print_offset_hex(evio_file.mm, event_infos[i-1][0], event_infos[i-1][1]//4)
+
+
+        start_offset, start_size = event_infos[0]
+        end_offset, end_size = event_infos[-1]
+
+        t0 = time.time()
+        event_data = np.frombuffer(
+                evio_file.mm[start_offset:end_offset + end_size],
+             dtype=np.dtype(np.uint32).newbyteorder('>' if endian == '>' else '<')
+        )
+        t1 = time.time()
+        print(f"Got frombuffer in {(t1-t0)*1000:.2f} ms")
+
+        event_word_size = end_size//4
+
+        t0 = time.time()
+        event_data = np.reshape(event_data,  (len(event_data) // event_word_size, event_word_size))
+        t1 = time.time()
+        print(f"Got reshape in {(t1-t0)*1000:.2f} ms")
+
+        print(f"=== Reshaped array: shape = {event_data.shape} ===")
+        # for row in event_data:
+        #     # For each row, join columns with a space, each printed as 16-digit hex:
+        #     print(" ".join(f"{val:08X}" for val in row))
 
 def direct_events_loading(filename, start_event=0, end_event=100, event_size_bytes=88):
     """
@@ -181,8 +233,8 @@ if __name__ == "__main__":
     filename = sys.argv[1]
 
     # Parse optional arguments
-    start_event = int(sys.argv[2]) if len(sys.argv) > 2 else 0
-    end_event = int(sys.argv[3]) if len(sys.argv) > 3 else start_event + 100
+    start_event = int(sys.argv[2]) if len(sys.argv) > 2 else 2
+    end_event = int(sys.argv[3]) if len(sys.argv) > 3 else start_event + 1001
     event_size_bytes = int(sys.argv[4]) if len(sys.argv) > 4 else 88
 
     if not os.path.exists(filename):
@@ -190,7 +242,7 @@ if __name__ == "__main__":
         sys.exit(1)
 
     # Run the direct events loading example
-    events_data = direct_events_loading(filename, start_event, end_event, event_size_bytes)
+    events_data = direct_events_loading2(filename, start_event, end_event, event_size_bytes)
 
     # Run benchmark
-    benchmark_loading_methods(filename)
+    # benchmark_loading_methods(filename)

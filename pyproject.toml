@@ -1,6 +1,6 @@
 [project]
 name = "pyevio"
-version = "0.1.0"
+dynamic = ["version"]
 description = "A Python EVIO parsing library and CLI."
 authors = [
     { name = "Dmitry Romanov", email = "romanovda@gmail.com" }
@@ -20,10 +20,12 @@ dependencies = [
 test = ["pytest"]
 
 
-
 [build-system]
-requires = ["setuptools", "wheel"]
+requires = ["setuptools", "wheel", "build", "twine"]
 build-backend = "setuptools.build_meta"
+
+[tool.setuptools.dynamic]
+version = {attr = "pyevio.__version__"}
 
 [project.scripts]
 pyevio = "pyevio.cli:main"

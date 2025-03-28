@@ -1,225 +1,219 @@
 import click
 from rich.console import Console
-from rich.panel import Panel
-from rich import box
-from rich.tree import Tree
 import struct
-from datetime import datetime
+from typing import List, Tuple, Optional, Dict, Any
+
+from rich.table import Table
 
 from pyevio.evio_file import EvioFile
-from pyevio.roc_time_slice_bank import RocTimeSliceBank
-from pyevio.utils import make_hex_dump
 
-def display_bank_structure(console, bank, depth=0, max_depth=5, preview=3, hexdump=False, evio_file=None):
+
+def fetch_events(evio_file, count, start, record, verbose=False):
     """
-    Display bank structure in a hierarchical format.
+    Fetch events based on the parameters.
 
     Args:
-        console: Rich console for output
-        bank: Bank object to display
-        depth: Current depth level
-        max_depth: Maximum depth to display
-        preview: Number of elements to preview
-        hexdump: Whether to show hex dumps
-        evio_file: EvioFile object for hexdumps
+        evio_file: EvioFile object
+        count: Number of events to fetch
+        start: Starting event index
+        record: Record index (if specified)
+        verbose: Whether to print verbose messages
+
+    Returns:
+        List of (Event, index) tuples
     """
-    # Create prefix based on depth
-    prefix = "  " * depth
+    events = []
 
-    # Display bank information
-    console.print(f"{prefix}[bold]Bank 0x{bank.tag:04X} ({get_bank_type_name(bank)})[/bold]")
-    console.print(f"{prefix}  Offset: 0x{bank.offset:X}[{bank.offset//4}], Length: {bank.length} words")
+    if record is not None:
+        # Get events from the specified record
+        try:
+            record_obj = evio_file.get_record(record)
+            # Adjust start index to be relative to the record
+            start = max(0, min(start, record_obj.event_count - 1))
+            # Fetch events from the record
+            record_events = record_obj.get_events(start, start + count)
+            events = [(event, f"{record}:{i + start}") for i, event in enumerate(record_events)]
+        except Exception as e:
+            if verbose:
+                print(f"Error accessing record {record}: {e}")
+            return []
+    else:
+        # Get events by global index
+        total_events = evio_file.get_total_event_count()
+        # Adjust start index
+        start = max(0, min(start, total_events - 1))
+        # Fetch events
+        for i in range(start, min(start + count, total_events)):
+            try:
+                record, event = evio_file.get_record_and_event(i)
+                events.append((event, i))
+            except Exception as e:
+                if verbose:
+                    print(f"Error fetching event {i}: {e}")
+                break
 
-    # If this is a container bank, recursively display children
-    if bank.is_container() and depth < max_depth:
-        children = bank.get_children()
+    return events
 
-        if not children:
-            console.print(f"{prefix}  [dim]No child banks[/dim]")
-            return
 
-        console.print(f"{prefix}  [bold]{len(children)} child banks:[/bold]")
-
-        # Display each child (up to a limit)
-        child_limit = min(len(children), preview * 2)
-        for i, child in enumerate(children):
-            if i < preview or i >= len(children) - preview or len(children) <= preview * 2:
-                display_bank_structure(
-                    console, child, depth + 1, max_depth, preview, hexdump, evio_file
-                )
-            elif i == preview and len(children) > preview * 2:
-                console.print(f"{prefix}    [dim]... {len(children) - (preview * 2)} more banks ...[/dim]")
-
-    # If this is a data bank, show preview
-    elif depth < max_depth:
-        # Try to get data as numpy array for better display
-        data = bank.to_numpy()
-        if data is not None:
-            # Show preview of data
-            preview_count = min(preview, len(data))
-            data_preview = ", ".join([f"{x}" for x in data[:preview_count]])
-
-            if len(data) > preview_count:
-                data_preview += f", ... ({len(data) - preview_count} more values)"
-
-            console.print(f"{prefix}  Data: [{data_preview}]")
-
-        # Show hexdump if requested
-        if hexdump and evio_file:
-            display_len = min(16, bank.data_length // 4)
-            if display_len > 0:
-                print_offset_hex(evio_file.mm, bank.data_offset, display_len,
-                                 f"{prefix}Bank Data at 0x{bank.data_offset:X}[{bank.data_offset//4}]")
-
-def display_bank_structure(console, bank, depth=0, max_depth=5, preview=3, hexdump=False, evio_file=None):
+def format_events(events, format_as, only):
     """
-    Display bank structure in a hierarchical format.
+    Format events for display.
 
     Args:
-        console: Rich console for output
-        bank: Bank object to display
-        depth: Current depth level
-        max_depth: Maximum depth to display
-        preview: Number of elements to preview
-        hexdump: Whether to show hex dumps
-        evio_file: EvioFile object for hexdumps
+        events: List of (Event, index) tuples
+        format_as: Output format ("hex" or "dec")
+        only: Comma-separated list of word indices to include
+
+    Returns:
+        List of formatted rows, one per event
     """
-    # Create prefix based on depth
-    prefix = "  " * depth
+    rows = []
 
-    # Display bank information
-    console.print(f"{prefix}[bold]Bank 0x{bank.tag:04X} ({get_bank_type_name(bank)})[/bold]")
-    console.print(f"{prefix}  Offset: 0x{bank.offset:X}[{bank.offset//4}], Length: {bank.length} words")
+    # Parse the "only" parameter if provided
+    selected_indices = None
+    if only:
+        try:
+            selected_indices = [int(idx.strip()) for idx in only.split(",")]
+            selected_indices.sort()  # Ensure indices are in order
+        except ValueError:
+            print(f"Warning: Invalid format for --only parameter: {only}")
 
-    # If this is a container bank, recursively display children
-    if bank.is_container() and depth < max_depth:
-        children = bank.get_children()
+    # Process events
+    for event, idx in events:
+        try:
+            # Get raw event data
+            data = event.get_data()
 
-        if not children:
-            console.print(f"{prefix}  [dim]No child banks[/dim]")
-            return
+            # Parse into 32-bit words
+            row = [f"{idx}"]
+            for i in range(0, len(data), 4):
+                if i + 4 <= len(data):  # Only process complete words
+                    word_bytes = data[i:i+4]
+                    word_value = struct.unpack(event.endian + "I", word_bytes)[0]
 
-        console.print(f"{prefix}  [bold]{len(children)} child banks:[/bold]")
+                    # Only include words in selected_indices if specified
+                    word_idx = i // 4
+                    if selected_indices is None or word_idx in selected_indices:
+                        if format_as == "hex":
+                            row.append(f"0x{word_value:08X}")
+                        elif format_as == "dec":
+                            row.append(f"{int(word_value)}")
 
-        # Display each child (up to a limit)
-        child_limit = min(len(children), preview * 2)
-        for i, child in enumerate(children):
-            if i < preview or i >= len(children) - preview or len(children) <= preview * 2:
-                display_bank_structure(
-                    console, child, depth + 1, max_depth, preview, hexdump, evio_file
-                )
-            elif i == preview and len(children) > preview * 2:
-                console.print(f"{prefix}    [dim]... {len(children) - (preview * 2)} more banks ...[/dim]")
+            # Add formatted row for this event
+            rows.append(row)
 
-    # If this is a data bank, show preview
-    elif depth < max_depth:
-        # Try to get data as numpy array for better display
-        data = bank.to_numpy()
-        if data is not None:
-            # Show preview of data
-            preview_count = min(preview, len(data))
-            data_preview = ", ".join([f"{x}" for x in data[:preview_count]])
+        except Exception as e:
+            print(f"Event #{idx}", f"Error: {str(e)}")
+            raise
 
-            if len(data) > preview_count:
-                data_preview += f", ... ({len(data) - preview_count} more values)"
+    return rows
 
-            console.print(f"{prefix}  Data: [{data_preview}]")
 
-        # Show hexdump if requested
-        if hexdump and evio_file:
-            display_len = min(16, bank.data_length // 4)
-            if display_len > 0:
-                print_offset_hex(evio_file.mm, bank.data_offset, display_len,
-                                 f"{prefix}Bank Data at 0x{bank.data_offset:X}[{bank.data_offset//4}]")
+def render_rows(rows, output_format="text"):
+    """
+    Render formatted rows for output.
+
+    Args:
+        rows: List of formatted rows
+        output_format: Output format (currently only "text")
+
+    Returns:
+        String containing rendered output
+    """
+    if not rows:
+        return "No events to display"
+
+    if output_format == "text":
+        # Find the maximum width of each column
+        max_widths = {}
+        for row in rows:
+            for i, cell in enumerate(row):
+                max_widths[i] = max(max_widths.get(i, 0), len(str(cell)))
+
+        # # Format each row with proper padding
+        # if not rows ||
+        #
+        # table = Table(title=None, box=None)
+        # table.add_column("Evt", style="cyan")
+        #
+        formatted_rows = []
+        for row in rows:
+            formatted_cells = []
+            for i, cell in enumerate(row):
+
+                # Left-align the event number, right-align the values
+                if i == 0:  # Event number
+                    formatted_cells.append(str(cell).ljust(max_widths[i]))
+                else:  # Data values
+                    formatted_cells.append(str(cell).rjust(max_widths[i]))
+
+            formatted_rows.append(" ".join(formatted_cells))
+
+        return "\n".join(formatted_rows)
+
+    # Add support for other formats (JSON, CSV, etc.) in the future
+    return "Unsupported output format"
 
 
 @click.command(name="dump")
 @click.argument("filename", type=click.Path(exists=True))
-@click.argument("record", type=int)
-@click.option("--depth", type=int, default=5, help="Maximum depth to display")
-@click.option("--events", type=int, default=1, help="Number of events to display (0 for all)")
-@click.option("--color/--no-color", default=True, help="Use ANSI colors")
-@click.option("--preview", type=int, default=3, help="Number of preview elements")
-@click.option("--hexdump/--no-hexdump", default=False, help="Show hex dump of data")
+@click.argument("count", type=int, required=False, default=1)
+@click.option("--start", "-s", type=int, default=2, help="Starting event index (default: 2)")
+@click.option("--record", "-r", type=int, help="Record number to use for event indexing")
+@click.option("--as", "format_as", type=click.Choice(["hex", "dec"]), default="hex", help="Output format")
+@click.option("--only", help="Only show specific word indices (comma-separated)")
 @click.option('--verbose', '-v', is_flag=True, help="Enable verbose output")
 @click.pass_context
-def dump_command(ctx, filename, record, depth, events, color, preview, hexdump, verbose):
-    """Inspect record structure in detail."""
+def dump_command(ctx, filename, count, start, record, format_as, only, verbose):
+    """Dump event data in tabular format.
+
+    FILENAME: Path to EVIO file
+    COUNT: Number of events to dump (default: 1)
+
+    Examples:
+      pyevio dump file              # Dump the 3rd event (index 2)
+      pyevio dump file 100          # Dump 100 events starting from the 3rd event
+      pyevio dump file -s 200 100   # Dump 100 events starting from event id=200
+      pyevio dump file -r 5 100     # Dump 100 events from record 5, starting from index 0
+      pyevio dump file --as=dec     # Dump in decimal format instead of hex
+      pyevio dump file --only=0,1,2 # Only show words 0, 1, and 2 from each event
+    """
     # Use either the command-specific verbose flag or the global one
     verbose = verbose or ctx.obj.get('VERBOSE', False)
-    console = Console(highlight=color)
+    console = Console()
 
-    with EvioFile(filename, verbose) as evio_file:
-        # Validate record index
-        if record < 0 or record >= evio_file.record_count:
-            raise click.BadParameter(f"Record {record} out of range (0-{evio_file.record_count-1})")
+    try:
+        with EvioFile(filename, verbose) as evio_file:
+            # Validate record if specified
+            if record is not None:
+                if record < 0 or record >= evio_file.record_count:
+                    console.print(f"[red]Record {record} out of range (0-{evio_file.record_count-1})[/red]")
+                    return 1
 
-        # Get the record object
-        record_obj = evio_file.get_record(record)
+                # If record is specified and start is default (2), adjust to 0
+                if start == 2 and not ctx.params.get("start"):
+                    start = 0
 
-        console.print(f"[bold]Record #{record} [Offset: 0x{record_obj.offset:X}[{record_obj.offset//4}], Length: {record_obj.header.record_length} words][/bold]")
-        console.print(f"[bold]Type: {record_obj.header.event_type}, Events: {record_obj.event_count}[/bold]")
+            # When using default start value for global index, print info
+            if record is None and start == 2 and not ctx.params.get("start"):
+                console.print(f"[dim]Using default global event index: {start}[/dim]")
 
-        # Show hexdump of record header if requested
-        if hexdump:
-            console.print()
-            print_offset_hex(evio_file.mm, record_obj.offset, record_obj.header.header_length, "Record Header")
+            # Fetch events based on parameters
+            events = fetch_events(evio_file, count, start, record, verbose)
 
-        # Determine which events to dump
-        event_count = min(events, record_obj.event_count) if events > 0 else record_obj.event_count
-        events_to_dump = list(range(min(event_count, 20)))  # Limit to 20 max
+            if not events:
+                console.print("[yellow]No events found with the specified parameters[/yellow]")
+                return
 
-        # Dump each event
-        for event_idx in events_to_dump:
-            try:
-                event_obj = record_obj.get_event(event_idx)
+            # Format events for display
+            formatted_rows = format_events(events, format_as, only)
 
-                console.print()
-                console.print(f"[bold yellow]Event #{event_idx} [Offset: 0x{event_obj.offset:X}[{event_obj.offset//4}], Length: {event_obj.length} bytes][/bold yellow]")
+            # Render and display the formatted rows
+            rendered_output = render_rows(formatted_rows)
+            print(rendered_output)
 
-                # Show hexdump of event if requested
-                if hexdump:
-                    print_offset_hex(evio_file.mm, event_obj.offset, min(16, event_obj.length//4),
-                                     f"Event #{event_idx} at 0x{event_obj.offset:X}[{event_obj.offset//4}]")
-
-                # Get the bank
-                try:
-                    bank = event_obj.get_bank()
-
-                    # Handle based on bank type
-                    if isinstance(bank, RocTimeSliceBank):
-                        # Display ROC Time Slice Bank with specialized handling
-                        console.print(f"[bold]ROC Time Slice Bank [ROC ID: {bank.roc_id}][/bold]")
-                        console.print(f"Timestamp: {bank.get_formatted_timestamp()}")
-                        console.print(f"Frame Number: {bank.sib.frame_number}")
-                        console.print(f"Payload Banks: {len(bank.payload_banks)}")
-
-                        # Show more detailed info if verbose
-                        if verbose:
-                            # Display Stream Info Bank
-                            console.print("\n[bold]Stream Info Bank:[/bold]")
-                            display_bank_structure(console, bank.sib, 1, depth, preview, hexdump, evio_file)
-
-                            # Display payload banks
-                            for i, payload in enumerate(bank.payload_banks[:min(preview, len(bank.payload_banks))]):
-                                console.print(f"\n[bold]Payload Bank #{i}:[/bold]")
-                                display_bank_structure(console, payload, 1, depth, preview, hexdump, evio_file)
-
-                            if len(bank.payload_banks) > preview:
-                                console.print(f"[dim]... {len(bank.payload_banks) - preview} more payload banks ...[/dim]")
-                    else:
-                        # Display generic bank structure
-                        display_bank_structure(console, bank, 0, depth, preview, hexdump, evio_file)
-
-                except Exception as e:
-                    console.print(f"[red]Error parsing bank: {str(e)}[/red]")
-                    if verbose:
-                        import traceback
-                        console.print(f"[dim]{traceback.format_exc()}[/dim]")
-
-            except Exception as e:
-                console.print(f"[red]Error processing event {event_idx}: {str(e)}[/red]")
-
-        # Show summary if multiple events processed
-        if len(events_to_dump) > 1:
-            console.print(f"\n[bold]Processed {len(events_to_dump)} of {record_obj.event_count} events in record {record}[/bold]")
+    except Exception as e:
+        console.print(f"[red]Error: {str(e)}[/red]")
+        if verbose:
+            import traceback
+            console.print(traceback.format_exc())

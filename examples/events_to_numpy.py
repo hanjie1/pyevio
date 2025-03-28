@@ -26,28 +26,10 @@ def extract_events_example(filename):
                 total_matching_events += 1
                 total_extracted_words += len(data)
 
-                # Example analysis: Calculate statistics on the data
-                data_mean = data.mean()
-                data_min = data.min()
-                data_max = data.max()
+                print(f"Record {record_idx}: Extracted {len(data)} words. Shape: {data.shape}")
+                exit(0)
 
-                print(f"Record {record_idx}: Extracted {len(data)} words")
-                print(f"  Data statistics: Min={data_min}, Max={data_max}, Mean={data_mean:.2f}")
 
-                # Example: Extract specific fields from the data
-                # This would depend on the specific event structure
-                if len(data) >= 10:  # Ensure we have enough data
-                    # Extract example fields (customize based on actual data structure)
-                    header = data[0]
-                    tag_word = data[1]
-                    timestamp_low = data[2] if len(data) > 2 else 0
-                    timestamp_high = data[3] if len(data) > 3 else 0
-
-                    # Combine timestamp parts (if using 64-bit timestamp)
-                    timestamp = (timestamp_high << 32) | timestamp_low
-
-                    print(f"  Header: 0x{header:08X}, Tag: 0x{tag_word:08X}")
-                    print(f"  Timestamp: {timestamp}")
 
         print(f"Summary: Found matching events in {total_matching_events} records")
         print(f"Total extracted words: {total_extracted_words}")

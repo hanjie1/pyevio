@@ -43,7 +43,7 @@ def get_bank_type_name(bank):
     return bank_type
 
 
-def display_bank_tree(tree, bank, level=0, max_depth=5, expand_all=False):
+def display_bank_tree(tree, bank, level=0, max_depth=10, expand_all=False):
     """
     Display bank structure in a hierarchical tree.
 
@@ -99,7 +99,7 @@ def display_bank_tree(tree, bank, level=0, max_depth=5, expand_all=False):
         # Add data preview for non-container banks
         data = bank.to_numpy()
         if data is not None and len(data) > 0:
-            preview_count = min(5, len(data))
+            preview_count = min(10, len(data))
             data_preview = ", ".join([f"{x}" for x in data[:preview_count]])
             if len(data) > preview_count:
                 data_preview += f", ... ({len(data) - preview_count} more values)"
