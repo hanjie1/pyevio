@@ -1,9 +1,8 @@
-from email.policy import default
-
+import mmap
+import os
 import click
 from rich.console import Console
 
-from pyevio.evio_file import EvioFile
 from pyevio.utils import print_offset_hex
 
 
@@ -42,10 +41,15 @@ def hex_command(ctx, filename, offset, size, bytes, endian, verbose):
     # Convert word offset to byte offset if needed
     byte_offset = offset if bytes else offset * 4
 
-    with EvioFile(filename, verbose) as evio_file:
-        # Get file endianness if not specified
-        if endian is None:
-            endian = evio_file.header.endian
-
-        title = f"Memory dump at offset: {'0x{:X}'.format(byte_offset) if bytes else f'word {offset}'}"
-        print_offset_hex(evio_file.mm, byte_offset, size, title, endian)
+    try:
+        # Open the file directly rather than using EvioFile
+        with open(filename, 'rb') as file:
+            file_size = os.path.getsize(filename)
+            with mmap.mmap(file.fileno(), 0, access=mmap.ACCESS_READ) as mm:
+                title = f"Memory dump at offset: {'0x{:X}'.format(byte_offset) if bytes else f'word {offset}'}"
+                print_offset_hex(mm, byte_offset, size, title, endian)
+    except Exception as e:
+        console.print(f"[red]Error: {str(e)}[/red]")
+        if verbose:
+            import traceback
+            console.print(traceback.format_exc())

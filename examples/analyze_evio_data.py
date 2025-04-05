@@ -17,19 +17,21 @@ def extract_events_example(filename):
         # Process each record
         total_matching_events = 0
         total_extracted_words = 0
+        global_evt_index = 0
 
         for record_idx in range(evio_file.record_count):
             record = evio_file.get_record(record_idx)
 
-            # Extract FF60 events to NumPy array
-            data = record.events_to_numpy(signature=0xFF60)
+            # Get event offsets and lengths
+            event_infos = record.get_event_offsets()
 
-            if len(data) > 0:
-                total_matching_events += 1
-                total_extracted_words += len(data)
 
-                print(f"Record {record_idx}: Extracted {len(data)} words. Shape: {data.shape}")
-                exit(0)
+            for i, (evt_offset, evt_len) in enumerate(event_infos):
+                global_evt_index += 1
+                if len > 92:
+                    print(global_evt_index, i, record_idx, evt_offset, evt_len)
+                    exit(0)
+
 
         print(f"Summary: Found matching events in {total_matching_events} records")
         print(f"Total extracted words: {total_extracted_words}")
@@ -47,4 +49,3 @@ if __name__ == "__main__":
     # Run the example
     extract_events_example(args.input_files[0])
     print("\n" + "-" * 50 + "\n")
-    batch_process_example(input_file, output_file)

@@ -1,0 +1,131 @@
+name: CI
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  test-pyevio:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+          # If you have other dependencies, do:
+          # pip install -r requirements.txt
+
+      - name: pyevio --help
+        run: python -m pyevio --help
+
+      - name: pyevio --version
+        run: python -m pyevio --version
+      # Example of each command, now referencing test/data/<filename>.
+#      - name: pyevio info vtp --verbose --hexdump --full
+#        run: python -m pyevio info test/data/testsro_vtp_45.evio.0.0 --verbose --hexdump --full
+#
+#      - name: pyevio info roc --verbose
+#        run: python -m pyevio info test/data/testsro_roc_45.evio.0.0 --verbose
+#
+#      - name: pyevio info roc
+#        run: python -m pyevio info test/data/testsro_roc_45.evio.0.0
+#
+#      - name: pyevio dump vtp
+#        run: python -m pyevio dump test/data/testsro_vtp_45.evio.0.0
+#
+#      - name: pyevio dump vtp -s 10000 100
+#        run: python -m pyevio dump test/data/testsro_vtp_45.evio.0.0 -s 10000 100
+#
+#      - name: pyevio dump roc -s 10000 100
+#        run: python -m pyevio dump test/data/testsro_roc_45.evio.0.0 -s 10000 100
+#
+#      - name: pyevio dump vtp 10 --as=dec
+#        run: python -m pyevio dump test/data/testsro_vtp_45.evio.0.0 10 --as=dec
+#
+#      - name: pyevio dump roc 10 --as=dec
+#        run: python -m pyevio dump test/data/testsro_roc_45.evio.0.0 10 --as=dec
+#
+#      - name: pyevio event roc 10000 --hexdump
+#        run: python -m pyevio event test/data/testsro_roc_45.evio.0.0 10000 --hexdump
+#
+#      - name: pyevio event vtp 10000 --hexdump
+#        run: python -m pyevio event test/data/testsro_vtp_45.evio.0.0 10000 --hexdump
+#
+#      - name: pyevio info (gemtrd example)
+#        run: python -m pyevio info test/data/hd_rawdata_003101_000.evio --hexdump
+#
+#      - name: pyevio hex 0 -s 64
+#        run: python -m pyevio hex test/data/hd_rawdata_003101_000.evio 0 -s 64
+#
+#      - name: pyevio hex 2003044 -s 500
+#        run: python -m pyevio hex test/data/testsro_vtp_45.evio.0.0 2003044 -s 500
+#
+#      - name: pyevio hex vtp 0
+#        run: python -m pyevio hex test/data/testsro_vtp_45.evio.0.0 0
+#
+#      - name: pyevio hex --bytes
+#        run: python -m pyevio hex test/data/testsro_vtp_45.evio.0.0 0xD8 --bytes -s 30
+#
+#      - name: pyevio record 0
+#        run: python -m pyevio record test/data/testsro_vtp_45.evio.0.0 0 --verbose --hexdump
+#
+#      - name: pyevio record 5 -a
+#        run: python -m pyevio record test/data/testsro_vtp_45.evio.0.0 5 -a
+#
+#      - name: pyevio record roc 2 -a
+#        run: python -m pyevio record test/data/testsro_roc_45.evio.0.0 2 -a
+#
+#      - name: pyevio ana roc
+#        run: python -m pyevio ana test/data/testsro_roc_45.evio.0.0
+#
+#      - name: pyevio ana vtp --limit 3
+#        run: python -m pyevio ana test/data/testsro_vtp_45.evio.0.0 --limit 3
+#
+#      - name: pyevio ana vtp
+#        run: python -m pyevio ana test/data/testsro_vtp_45.evio.0.0
+#
+#      - name: pyevio debug vtp -r 2 -e 0 --verbose --hexdump
+#        run: python -m pyevio debug test/data/testsro_vtp_45.evio.0.0 -r 2 -e 0 --verbose --hexdump
+#
+#      - name: pyevio debug vtp no verbose
+#        run: python -m pyevio debug test/data/testsro_vtp_45.evio.0.0 -r 2 -e 0
+#
+#      - name: pyevio debug vtp ui
+#        run: python -m pyevio ui test/data/testsro_vtp_45.evio.0.0
+#
+#      - name: pyevio debug -r 2 -e 0 (1)
+#        run: python -m pyevio debug test/data/testsro_vtp_45.evio.0.0 -r 2 -e 0 --verbose --hexdump
+#
+#      # Scripts from examples directory, just as in PyCharm.
+#      - name: analyze_evio_data
+#        working-directory: examples
+#        run: python analyze_evio_data.py test/data/testsro_vtp_45.evio.0.0 -e 5
+#
+#      - name: direct_numpy
+#        working-directory: examples
+#        run: python direct_numpy.py test/data/testsro_vtp_45.evio.0.0
+#
+#      - name: events_to_numpy
+#        working-directory: examples
+#        run: python events_to_numpy.py
+#
+#      - name: hex_dump
+#        working-directory: examples
+#        run: python hex_dump.py
+#
+#      # Finally, pytest in your tests/ folder
+#      - name: Run pytest in tests/
+#        working-directory: tests
+#        run: |
+#          pytest --maxfail=1 --disable-warnings -v
