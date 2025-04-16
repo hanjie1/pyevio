@@ -131,7 +131,7 @@ class EvioFile:
         # Check if record is already cached
         if index not in self._records:
             offset = self._record_offsets[index]
-            self._records[index] = Record(self.mm, offset, self.header.endian)
+            self._records[index] = Record(self.mm, offset, self.header.endian, index=index)
 
         return self._records[index]
 
@@ -213,7 +213,7 @@ class EvioFile:
 
         Returns: found events
         """
-        _, event = self.get_record_and_event(global_index)
+        _, _, event, _ = self.get_record_and_event(global_index)
         return event
 
     def iter_events(self) -> Iterator[Tuple[Record, Event]]:

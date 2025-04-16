@@ -7,6 +7,7 @@ from pyevio.record_header import RecordHeader
 from pyevio.utils import make_hex_dump
 import numpy as np
 
+
 class Record:
     """
     Represents a record in an EVIO file.
@@ -16,7 +17,7 @@ class Record:
     structure efficiently.
     """
 
-    def __init__(self, mm: mmap.mmap, offset: int, endian: str = '<'):
+    def __init__(self, mm: mmap.mmap, offset: int, endian: str = '<', index=-1):
         """
         Initialize a Record object.
 
@@ -34,11 +35,12 @@ class Record:
 
         # Calculate key positions in the record
         self.header_size = self.header.header_length * 4
-        self.index_start = self.offset + self.header_size
-        self.index_end = self.index_start + self.header.index_array_length
-        self.data_start = self.index_end + self.header.user_header_length
+        self.index_array_start = self.offset + self.header_size
+        self.index_array_end = self.index_array_start + self.header.index_array_length
+        self.data_start = self.index_array_end + self.header.user_header_length
         self.data_end = self.offset + (self.header.record_length * 4)
         self.size = self.header.record_length * 4
+        self.index = index
 
         # Cache for events (will be populated on demand)
         self._events = None
@@ -66,7 +68,7 @@ class Record:
             current_offset = self.data_start
 
             for i in range(event_count):
-                length_offset = self.index_start + (i * 4)
+                length_offset = self.index_array_start + (i * 4)
                 event_length = struct.unpack(self.endian + 'I', self.mm[length_offset:length_offset+4])[0]
 
                 # Store event offset and length
