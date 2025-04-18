@@ -54,6 +54,8 @@ def analyze_data_bank(bank: Bank, verbose: bool = False, decoder  = None):
     """
     # ---------- 1. pick a decoder -------------------------------------------
     dec = decoder or FaDecoder()
+    roc_id = bank.tag & 0x7FFF   # Now bank tag should be roc_id
+    print(f"ROC ID = {roc_id}")
 
     # ---------- 2. get payload as uint32 words ------------------------------
     payload = bank.get_data()
@@ -115,8 +117,9 @@ def analyze_fadc250_event(event, verbose=False):
         print(f"Unknown bank {children[0].tag:2X} bank")
         return None
 
-    for i in range(1, len(children)):
-        analyze_data_bank(children[i], verbose)
+    for bank in children[1:]:
+
+        analyze_data_bank(bank, verbose)
 
 
 def extract_events_example(filename, max_event=10, verbose=False):
@@ -149,7 +152,7 @@ def extract_events_example(filename, max_event=10, verbose=False):
             if global_evt_index < 2:
                 continue
 
-            event_data = analyze_fadc250_event(event, verbose)
+            analyze_fadc250_event(event, verbose)
 
 
 

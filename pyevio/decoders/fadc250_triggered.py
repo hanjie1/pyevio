@@ -97,7 +97,7 @@ class FaDecoder:
         self.MAXRAW       = 4096  # guess or read from context
         self.MAXHIT       = 10
         self.fadc_nhit    = [0]*self.FADC_NCHAN
-        self.frawdata     = [ [0]*self.MAXRAW for _ in range(self.FADC_NCHAN) ]
+        self.frawdata     = [[0]*self.MAXRAW for _ in range(self.FADC_NCHAN)]
         self.fadc_int     = [0]*self.FADC_NCHAN
         self.fadc_int_1   = [0]*self.FADC_NCHAN
         self.fadc_time    = [0]*self.FADC_NCHAN
