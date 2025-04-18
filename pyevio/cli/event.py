@@ -83,7 +83,7 @@ def event_command(ctx, filename, event_index, record_index, hexdump, verbose):
             if record_index is None:
                 # Event index is global.
                 record, event = evio_file.get_record_and_event(event_index)
-                console.print(f"[dim]Global event {event_index} maps to: record {record_index}, event {event.index}[/dim]")
+                console.print(f"[dim]Global event {event_index} maps to: record# {record.index}, local event index: {event.index}[/dim]")
             else:
                 # Record-specific event indexing
                 record = evio_file.get_record(record_index)
