@@ -2,6 +2,7 @@ import mmap
 import struct
 from typing import List, Tuple, Optional, Dict, Any
 from datetime import datetime
+from pyevio.bank import Bank  # Import here to avoid circular import
 
 from pyevio.utils import make_hex_dump
 
@@ -86,7 +87,7 @@ class Event:
 
         return self._bank_info
 
-    def get_bank(self):
+    def get_bank(self)->Bank:
         """
         Get the root bank of this event.
 
@@ -94,8 +95,6 @@ class Event:
             Bank object for this event's root bank
         """
         if self._root_bank is None:
-            from pyevio.bank import Bank  # Import here to avoid circular import
-
             # Parse the root bank
             self._root_bank = Bank.from_buffer(self.mm, self.offset, self.endian)
 

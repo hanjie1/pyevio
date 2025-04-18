@@ -1,120 +1,82 @@
 import argparse
 import struct
 import numpy as np
-from pyevio import EvioFile
+from pyevio import EvioFile, Bank
+from rich import inspect as rich_inspect
 
-# Known special patterns
-END_MARKER = 0x0000C0F8
-PEDESTAL_MARKER = 0x0600C088
+from pyevio.decoders.fadc250_triggered import FaDecoder
 
-def decode_fadc250_data(word):
+
+# --- new helper --------------------------------------------------------------
+def _payload_to_words(data: bytes, little_endian: bool) -> np.ndarray:
     """
-    Decode a FADC250 data word according to the JLab documentation.
+    View a raw bytes object as an array of 32‑bit unsigned words.
 
     Args:
-        word: 32-bit word to decode
+        data          : raw payload returned by Bank.get_data()
+        little_endian : True  -> '<u4'
+                        False -> '>u4'
 
-    Returns:
-        dict: Decoded information
+    Returns
+    -------
+        np.ndarray of dtype uint32, 1‑D.
     """
-    # Check if this is a type-defining word
-    is_type_word = ((word >> 31) & 0x1) == 1
+    # NB: EVIO banks are always word‑aligned.  If something is off,
+    # raise early – it usually means the bank is corrupt or the caller
+    # sliced too far.
+    if len(data) % 4:
+        raise ValueError(f"payload length {len(data)} is not a multiple of 4 bytes")
 
-    if is_type_word:
-        # Get data type from bits 30-27
-        data_type = (word >> 27) & 0xF
+    dtype = np.dtype('<u4' if little_endian else '>u4')
+    return np.frombuffer(data, dtype=dtype)
+# -----------------------------------------------------------------------------
 
-        type_info = {
-            0: "Block Header",
-            1: "Block Trailer",
-            2: "Event Header",
-            3: "Trigger Time",
-            4: "Window Raw Data",
-            5: "Window Sum",
-            6: "Pulse Raw Data",
-            7: "Pulse Integral",
-            8: "Pulse Time",
-            9: "Pulse Data",
-            10: "Pulse Pedestal",
-            13: "Event Trailer",
-            14: "Data Not Valid",
-            15: "Filler Word"
-        }
 
-        result = {
-            'is_type_word': True,
-            'data_type': data_type,
-            'type_name': type_info.get(data_type, f"Unknown ({data_type})"),
-            'word': word
-        }
+def analyze_data_bank(bank: Bank, verbose: bool = False, decoder  = None):
+    """
+    Decode a *single* ROC‑data bank that contains raw FADC‑250 words.
 
-        # Extract fields based on type
-        if data_type == 0:  # Block Header
-            result['slot'] = (word >> 22) & 0x1F
-            result['event_count'] = (word >> 14) & 0xFF
-            result['module_type'] = (word >> 12) & 0x3
-            result['block_num'] = word & 0xFFF
+    Parameters
+    ----------
+    bank     : Bank
+        The EVIO bank whose payload should be decoded.
+    verbose  : bool, optional
+        Forwarded to FaDecoder.faDataDecode().
+    decoder  : FaDecoder | None, optional
+        If supplied, the same decoder instance will be reused; otherwise
+        a fresh one is created.
 
-        elif data_type == 1:  # Block Trailer
-            result['slot'] = (word >> 22) & 0x1F
-            result['word_count'] = word & 0x3FFFFF
+    Returns
+    -------
+    dict
+        Snapshot of the decoder’s state after the last word – useful if
+        you want to inspect integrals, times, hit counts, etc.
+    """
+    # ---------- 1. pick a decoder -------------------------------------------
+    dec = decoder or FaDecoder()
 
-        elif data_type == 2:  # Event Header
-            result['slot'] = (word >> 22) & 0x1F
-            result['module_type'] = (word >> 20) & 0x3
-            result['trigger_num'] = word & 0x3FFFFF
+    # ---------- 2. get payload as uint32 words ------------------------------
+    payload = bank.get_data()
+    words   = _payload_to_words(payload, little_endian=(bank.endian == '<'))
 
-        elif data_type == 3:  # Trigger Time
-            result['time_low'] = word & 0xFFFFFF
+    # ---------- 3. loop over words ------------------------------------------
+    for w in words:
+        # convert NumPy scalar to plain Python int for clarity
+        dec.faDataDecode(int(w), verbose=verbose)
 
-        elif data_type == 4:  # Window Raw Data
-            result['channel'] = (word >> 23) & 0x0F
-            result['window_width'] = word & 0x0FFF
+    rich_inspect(dec.fadc_data, methods=False, private=False)
 
-        elif data_type == 5:  # Window Sum
-            result['channel'] = (word >> 23) & 0x0F
-            result['overflow'] = (word >> 22) & 0x1
-            result['sum'] = word & 0x3FFFFF
-
-        elif data_type == 7:  # Pulse Integral
-            result['channel'] = (word >> 23) & 0x0F
-            result['pulse_number'] = (word >> 21) & 0x03
-            result['quality_factor'] = (word >> 19) & 0x03
-            result['sum'] = word & 0x7FFFF
-
-        elif data_type == 8:  # Pulse Time
-            result['channel'] = (word >> 23) & 0x0F
-            result['pulse_number'] = (word >> 21) & 0x03
-            result['quality_factor'] = (word >> 19) & 0x03
-            result['time'] = word & 0x7FFFF
-
-        return result
-
-    else:
-        # This is a data word - decode according to FADC250 format
-        channel = (word >> 13) & 0x000F
-        charge = word & 0x1FFF
-        time = ((word >> 17) & 0x3FFF) * 4
-
-        # Check for known special patterns
-        is_end_marker = (word == END_MARKER)
-        is_pedestal_marker = (word == PEDESTAL_MARKER)
-
-        type_name = "Data"
-        if is_end_marker:
-            type_name = "End Marker"
-        elif is_pedestal_marker:
-            type_name = "Pedestal Marker"
-
-        return {
-            'is_type_word': False,
-            'is_special_marker': is_end_marker or is_pedestal_marker,
-            'type_name': type_name,
-            'channel': channel,
-            'charge': charge,
-            'time': time,
-            'word': word
-        }
+    # ---------- 4. return whatever you need ---------------------------------
+    # Here we simply expose the internal struct so the caller can grab
+    # integrals, times, scaler counts, etc.  Tailor to taste.
+    return {
+        "slot"       : dec.fadc_data.slot_id_hd,
+        "trig_time"  : getattr(dec, "fadc_trigtime", None),
+        "nhit"       : dec.fadc_nhit.copy(),
+        "integrals"  : dec.fadc_int.copy(),
+        "times"      : dec.fadc_time.copy(),
+        # ... add anything else you want to keep
+    }
 
 def analyze_fadc250_event(event, verbose=False):
     """
@@ -127,68 +89,37 @@ def analyze_fadc250_event(event, verbose=False):
     Returns:
         dict: Decoded FADC250 data
     """
-    try:
-        # Get the root bank for this event
-        root_bank = event.get_bank()
 
-        # Only process physics events (0xFF50)
-        if root_bank.tag != 0xFF50:
-            return None
+    # Get the root bank for this event
+    root_bank = event.get_bank()
 
-        result = {
-            'physics_event': True,
-            'roc_data': {}
-        }
-
-        # Find Event Builder bank (0x0001)
-        eb_bank = None
-        for child in root_bank.get_children():
-            if child.tag == 0x0001:
-                eb_bank = child
-                break
-
-        if not eb_bank:
-            return result
-
-        # Process ROC data banks
-        for roc_bank in eb_bank.get_children():
-            roc_id = roc_bank.tag
-            if roc_id not in result['roc_data']:
-                result['roc_data'][roc_id] = {
-                    'raw_words': [],
-                    'decoded_words': [],
-                    'hits': []
-                }
-
-            # Get raw data words
-            raw_data = roc_bank.to_numpy()
-            if raw_data is None or len(raw_data) == 0:
-                continue
-
-            # Store raw words
-            result['roc_data'][roc_id]['raw_words'] = raw_data.tolist()
-
-            # Decode all words
-            for word in raw_data:
-                decoded = decode_fadc250_data(word)
-                result['roc_data'][roc_id]['decoded_words'].append(decoded)
-
-                # Extract hit information from data words, excluding special markers
-                if not decoded['is_type_word'] and not decoded.get('is_special_marker', False):
-                    result['roc_data'][roc_id]['hits'].append({
-                        'channel': decoded['channel'],
-                        'charge': decoded['charge'],
-                        'time': decoded['time']
-                    })
-
-        return result
-
-    except Exception as e:
-        if verbose:
-            print(f"Error analyzing event: {str(e)}")
+    # Only process physics events (0xFF50)
+    if root_bank.tag != 0xFF50:
         return None
 
-def extract_events_example(filename, max_events=None, verbose=False):
+    result = {
+        'physics_event': True,
+        'roc_data': {}
+    }
+
+    children = list(root_bank.get_children())
+    print(f"len(children) = {len(children)}")
+
+    if len(children) < 2:
+        print(f"len(children) < 2")
+        return None
+
+    if children[0].tag == 0xFF21:
+        print("Found FF21 bank")
+    else:
+        print(f"Unknown bank {children[0].tag:2X} bank")
+        return None
+
+    for i in range(1, len(children)):
+        analyze_data_bank(children[i], verbose)
+
+
+def extract_events_example(filename, max_event=10, verbose=False):
     """
     Process EVIO file and extract FADC250 data.
     """
@@ -198,82 +129,30 @@ def extract_events_example(filename, max_events=None, verbose=False):
     with EvioFile(filename) as evio_file:
         print(f"File contains {evio_file.record_count} records")
 
+        total_event_count = evio_file.get_total_event_count()
+        print(f"File total_event_count = {total_event_count}")
+        if max_event is None:
+            max_event = total_event_count
+        else:
+            max_event = min(max_event, total_event_count)
+        print(f"max_event is set to: {max_event}")
+
         global_evt_index = 0
+        event_iter = evio_file.iter_events()
 
-        for record_idx in range(evio_file.record_count):
-            record = evio_file.get_record(record_idx)
-            events = record.get_events()
+        for record, event in evio_file.iter_events():
+            if global_evt_index >= max_event:
+                break
+            global_evt_index += 1
 
-            for event_idx, event in enumerate(events):
-                # Limit events if requested
-                if max_events is not None and global_evt_index >= max_events:
-                    return
+            # First two events are control and we skip them
+            if global_evt_index < 2:
+                continue
 
-                # Analyze the event
-                event_data = analyze_fadc250_event(event, verbose)
+            event_data = analyze_fadc250_event(event, verbose)
 
-                if event_data:
-                    print(f"\nEvent {global_evt_index}, Record {record_idx}, Event {event_idx}")
 
-                    # Process each ROC
-                    for roc_id, roc_data in event_data['roc_data'].items():
-                        print(f"  ROC {roc_id} (0x{roc_id:04X}): {len(roc_data['raw_words'])} words")
 
-                        # Display detailed word analysis
-                        if verbose:
-                            print("  Word Analysis:")
-                            print("  ---------------------------------------------")
-                            print("  Word#  Hex Value   Type      Description")
-                            print("  ---------------------------------------------")
-
-                            for i, (word, decoded) in enumerate(zip(roc_data['raw_words'], roc_data['decoded_words'])):
-                                binary = bin(word)[2:].zfill(32)
-                                bit31 = binary[0]
-
-                                if decoded['is_type_word']:
-                                    type_name = decoded['type_name']
-
-                                    # Format description based on type
-                                    if 'slot' in decoded:
-                                        if 'trigger_num' in decoded:
-                                            desc = f"Slot {decoded['slot']}, Trigger {decoded['trigger_num']}"
-                                        else:
-                                            desc = f"Slot {decoded['slot']}"
-                                    elif 'channel' in decoded:
-                                        if 'sum' in decoded:
-                                            desc = f"Channel {decoded['channel']}, Sum {decoded['sum']}"
-                                        elif 'time' in decoded:
-                                            desc = f"Channel {decoded['channel']}, Time {decoded['time']}"
-                                        else:
-                                            desc = f"Channel {decoded['channel']}"
-                                    else:
-                                        desc = ""
-
-                                elif decoded.get('is_special_marker', False):
-                                    type_name = decoded['type_name']
-                                    if type_name == "End Marker":
-                                        desc = "(Data stream end marker)"
-                                    elif type_name == "Pedestal Marker":
-                                        desc = "(Pedestal/calibration reference)"
-                                    else:
-                                        desc = "(Not an actual hit)"
-                                else:
-                                    type_name = "Data"
-                                    desc = f"Channel {decoded['channel']}, Charge {decoded['charge']}, Time {decoded['time']}"
-
-                                print(f"  {i:5d}  0x{word:08X}  {type_name:<10}  {desc}")
-                                print(f"          Bit31={bit31}, Binary: {' '.join(binary[i:i+4] for i in range(0, 32, 4))}")
-
-                        # Show hits summary, excluding special markers
-                        if roc_data['hits']:
-                            print(f"  Found {len(roc_data['hits'])} real hits:")
-                            for i, hit in enumerate(roc_data['hits'][:5]):  # Show first 5 hits
-                                print(f"    Hit {i}: Channel {hit['channel']}, Charge {hit['charge']}, Time {hit['time']}")
-
-                            if len(roc_data['hits']) > 5:
-                                print(f"    ... and {len(roc_data['hits'])-5} more hits")
-
-                global_evt_index += 1
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Experiments with evio FADC250 data")
