@@ -111,6 +111,7 @@ class FaDecoder:
 
         # We'll store fadc_trigtime as an attribute as well
         self.fadc_trigtime = 0
+        self.block_trailer_found = False
 
 
     def GetFadcMode(self):
@@ -169,6 +170,7 @@ class FaDecoder:
         elif t == 1:  # BLOCK TRAILER
             fadc_data.slot_id_tr = (data & 0x7C00000) >> 22
             fadc_data.n_words    = (data & 0x3FFFFF)
+            self.block_trailer_found = True
             if verbose:
                 print(f"{data:08X} - BLOCK TRAILER - slot = {fadc_data.slot_id_tr}   "
                       f"n_words = {fadc_data.n_words}")
@@ -182,7 +184,7 @@ class FaDecoder:
                 fadc_data.evt_num_1 = data & 0x3FFFFF
                 self.trignum        = fadc_data.evt_num_1
                 if verbose:
-                    print(f"{data:08X} - EVENT HEADER 1 - evt_num = {fadc_data.evt_num_1}")
+                    print(f"{data:08X} - EVENT HEADER 1 - evt_num = {fadc_data.evt_num_1} - slot = {fadc_data.slot_id_evt}")
             else:
                 fadc_data.evt_num_2 = data & 0x3FFFFF
                 if verbose:
