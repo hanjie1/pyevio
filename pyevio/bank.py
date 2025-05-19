@@ -223,7 +223,7 @@ class Bank(BankHeader):
         Returns:
             Bytes object containing the raw bank data
         """
-        return self.mm[self.data_offset:self.data_offset + self.data_length]
+        return self.mm[self.data_offset:self.data_offset + self.data_length + 4]
 
     def to_numpy(self) -> Optional[np.ndarray]:
         """
@@ -285,7 +285,7 @@ class Bank(BankHeader):
             String containing formatted hexdump
         """
         display_len = min(max_bytes, self.data_length)
-        data = self.mm[self.data_offset:self.data_offset + display_len]
+        data = self.mm[self.data_offset:self.data_offset + display_len + 4]
         return make_hex_dump(data, title=title or f"Bank Data at offset 0x{self.data_offset:X}")
 
     def __str__(self) -> str:
